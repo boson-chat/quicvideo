@@ -31,7 +31,7 @@ func main() {
 	token := flag.String("token", "", "token (with AUTH_INSECURE: any user id)")
 	room := flag.String("room", "call", "room")
 	insecure := flag.Bool("insecure", false, "skip TLS verification")
-	layer := flag.Uint("layer", 0, "layer to subscribe to")
+	layer := flag.Uint("layer", 99, "max layer to subscribe to (default: the top layer); the server picks within it")
 	only := flag.Uint("track", 0, "only this track id (0 = all)")
 	dump := flag.String("dump", "", "write the received bitstream of the first subscribed track to this file")
 	duration := flag.Duration("duration", 0, "stop after this long (0 = until Ctrl-C)")
@@ -147,6 +147,10 @@ func main() {
 			switch {
 			case m.GetTrackAdded() != nil:
 				subscribe(m.GetTrackAdded().GetTrack())
+			case m.GetSubscriptionState() != nil:
+				st := m.GetSubscriptionState()
+				log.Printf("track %d: layer %d (target %d, max %d) forwarding=%v paused=%v estimate %d kbps",
+					st.GetTrackId(), st.GetLayer(), st.GetTargetLayer(), st.GetMaxLayer(), st.GetForwarding(), st.GetPaused(), st.GetEstimateBps()/1000)
 			case m.GetTrackRemoved() != nil:
 				log.Printf("track %d removed", m.GetTrackRemoved().GetTrackId())
 			case m.GetError() != nil:

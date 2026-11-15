@@ -1,6 +1,8 @@
 package relay
 
 import (
+	"fmt"
+	"sort"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -18,9 +20,15 @@ type Track struct {
 	kind   controlpb.TrackKind
 	codec  string
 	layerP []*controlpb.Layer
+	byRate []*controlpb.Layer // layerP sorted by bitrate, lowest first
 	layers map[uint32]*layerState
 	subs   map[*Subscription]struct{} // guarded by Relay.mu
 	closed atomic.Bool
+
+	// Ingress delay baseline over all layers (arrival − capture; the
+	// publisher's clock offset cancels): minimum over two rolling windows.
+	minCur, minPrev time.Duration
+	minSince        time.Time
 
 	// Ingress token bucket over all layers, in bytes.
 	bucketMu   sync.Mutex
@@ -37,6 +45,8 @@ func newTrack(r *Relay, owner *Member, id uint32, kind controlpb.TrackKind, code
 		t.layerP = append(t.layerP, lp)
 		t.layers[lp.Id] = &layerState{t: t, id: lp.Id, subs: map[*Subscription]struct{}{}}
 	}
+	t.byRate = append([]*controlpb.Layer(nil), t.layerP...)
+	sort.SliceStable(t.byRate, func(i, j int) bool { return t.byRate[i].GetBitrate() < t.byRate[j].GetBitrate() })
 	t.rate = float64(total) / 8 * r.opts.IngressSlack
 	// Two seconds at the allowed rate, and at least one max-size frame, so a
 	// keyframe burst never trips it.
@@ -92,6 +102,33 @@ type layerState struct {
 	cacheOK    bool
 	subs       map[*Subscription]struct{}
 	lastKF     time.Time
+	lastStart  time.Time // when the current group started
+	lastFrame  time.Time
+	// Ingress health: a layer the publisher can't deliver on time (its
+	// uplink is too slow) is kept out of allocations for a while.
+	lateEWMA       time.Duration
+	unhealthyUntil time.Time
+	penalty        time.Duration
+	healthySince   time.Time
+	gopDur         time.Duration // last observed group length
+
+	// Activity (guarded by Relay.mu): whether the publisher was told this
+	// layer is wanted, and since when nobody wants it.
+	activeSent bool
+	idleSince  time.Time
+}
+
+// sending: the publisher sent a frame on this layer within d.
+func (l *layerState) sending(now time.Time, d time.Duration) bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return !l.lastFrame.IsZero() && now.Sub(l.lastFrame) < d
+}
+
+func (l *layerState) gop() time.Duration {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.gopDur
 }
 
 func (l *layerState) openGroup(g uint64) (*GroupIngest, error) {
@@ -105,14 +142,22 @@ func (l *layerState) openGroup(g uint64) (*GroupIngest, error) {
 	return &GroupIngest{l: l, group: g}, nil
 }
 
-// addSub registers sub on this layer and replays the cached current group
-// so the subscriber gets a picture right away. Without a usable cache it
-// asks the publisher for a keyframe.
-func (l *layerState) addSub(sub *Subscription) {
+// addSub registers sub on this layer. With replay, the cached current
+// group is replayed so the subscriber gets a picture right away; without a
+// usable cache the publisher is asked for a keyframe.
+func (l *layerState) addSub(sub *Subscription, replay bool) {
 	l.mu.Lock()
 	l.subs[sub] = struct{}{}
-	needKF := true
-	if l.hasCurrent && l.cacheOK && len(l.cache) > 0 {
+	needKF := replay
+	now := l.t.r.opts.Now()
+	// Only replay a live layer's group (an inactive layer's cache is
+	// stale), and on a switch only a recent one: replaying a long partial
+	// GOP shows old frames and costs bandwidth right when it's short. A
+	// fresh keyframe on a lower layer is cheap.
+	_, _, switching, _, _ := sub.state()
+	live := !l.lastFrame.IsZero() && now.Sub(l.lastFrame) < time.Second
+	recent := now.Sub(l.lastStart) <= l.t.r.opts.ReplayMaxAge
+	if replay && live && (recent || !switching) && l.hasCurrent && l.cacheOK && len(l.cache) > 0 {
 		needKF = false
 		for i, f := range l.cache {
 			keep, kf := sub.deliver(l.id, l.current, f, i == 0)
@@ -190,11 +235,19 @@ func (g *GroupIngest) Frame(f *wire.Frame) error {
 		}
 		l.hasCurrent, l.current = true, g.group
 		l.cache, l.cacheBytes, l.cacheOK = l.cache[:0], 0, true
+		now := t.r.opts.Now()
+		if !l.lastStart.IsZero() {
+			l.gopDur = now.Sub(l.lastStart)
+		}
+		l.lastStart = now
 	} else if g.group != l.current {
 		l.mu.Unlock()
 		m.FrameDropped(metrics.DropStale, len(f.Payload))
 		return ErrStale
 	}
+	now := t.r.opts.Now()
+	l.lastFrame = now
+	l.observeIngress(now, f.CaptureUS)
 	if l.cacheOK {
 		if l.cacheBytes+len(f.Payload) <= t.r.opts.GroupCacheBytes {
 			l.cache = append(l.cache, f)
@@ -234,4 +287,119 @@ func (g *GroupIngest) End(aborted bool) {
 	for sub := range l.subs {
 		sub.endGroup(l.id, g.group, aborted)
 	}
+}
+
+// updateActivity tells the publisher which layers somebody wants: active
+// at once, inactive after LayerIdleTimeout with nobody (so a layer switch
+// in progress doesn't toggle it). Caller holds Relay.mu.
+func (t *Track) updateActivity(now time.Time) {
+	if t.closed.Load() {
+		return
+	}
+	want := map[uint32]bool{}
+	for sub := range t.subs {
+		target, active, hasActive, paused, _ := sub.state()
+		if paused {
+			continue
+		}
+		want[target] = true
+		if hasActive {
+			want[active] = true
+		}
+	}
+	for _, lp := range t.layerP {
+		l := t.layers[lp.GetId()]
+		switch {
+		case want[l.id]:
+			l.idleSince = time.Time{}
+			if !l.activeSent {
+				l.activeSent = true
+				t.sendActive(l.id, true)
+			}
+		case l.activeSent:
+			if l.idleSince.IsZero() {
+				l.idleSince = now
+			} else if now.Sub(l.idleSince) >= t.r.opts.LayerIdleTimeout {
+				l.mu.Lock()
+				l.cache, l.cacheBytes, l.cacheOK = nil, 0, false
+				l.mu.Unlock()
+				l.activeSent = false
+				l.idleSince = time.Time{}
+				t.sendActive(l.id, false)
+			}
+		}
+		// Drop subscriptions that moved away from this layer.
+		l.mu.Lock()
+		for sub := range l.subs {
+			target, active, hasActive, paused, _ := sub.state()
+			if paused || (sub.closedNow() || (target != l.id && (!hasActive || active != l.id))) {
+				delete(l.subs, sub)
+			}
+		}
+		l.mu.Unlock()
+	}
+}
+
+func (t *Track) sendActive(layer uint32, active bool) {
+	t.owner.peer.SendControl(&controlpb.ControlMessage{Msg: &controlpb.ControlMessage_LayerActive{
+		LayerActive: &controlpb.LayerActive{TrackId: t.id, Layer: layer, Active: active}}})
+}
+
+// IngressLateDown: a layer whose frames arrive this much later than the
+// track's best (smoothed) is unhealthy. Penalties start at 15 s and double
+// up to 60 s; a minute of good health resets them.
+const (
+	IngressLateDown = 250 * time.Millisecond
+	minPenalty      = 15 * time.Second
+	maxPenalty      = 60 * time.Second
+	ingressWindow   = 5 * time.Second
+)
+
+// observeIngress updates the layer's lateness. Caller holds l.mu.
+func (l *layerState) observeIngress(now time.Time, captureUS uint64) {
+	t := l.t
+	rel := now.Sub(time.UnixMicro(int64(captureUS)))
+	t.bucketMu.Lock() // the baseline is track-wide; the bucket lock is a leaf lock
+	switch {
+	case t.minSince.IsZero() || now.Sub(t.minSince) > 2*ingressWindow:
+		t.minPrev, t.minCur, t.minSince = -1, rel, now
+	case now.Sub(t.minSince) > ingressWindow:
+		t.minPrev, t.minCur, t.minSince = t.minCur, rel, now
+	case rel < t.minCur:
+		t.minCur = rel
+	}
+	base := t.minCur
+	if t.minPrev >= 0 && t.minPrev < base {
+		base = t.minPrev
+	}
+	t.bucketMu.Unlock()
+	excess := max(rel-base, 0)
+	l.lateEWMA = (l.lateEWMA*9 + excess) / 10
+	if !l.healthyLocked(now) {
+		return
+	}
+	if l.lateEWMA > IngressLateDown {
+		if l.penalty == 0 || (!l.healthySince.IsZero() && now.Sub(l.healthySince) > time.Minute) {
+			l.penalty = minPenalty
+		} else {
+			l.penalty = min(l.penalty*2, maxPenalty)
+		}
+		l.unhealthyUntil = now.Add(l.penalty)
+		l.lateEWMA, l.healthySince = 0, time.Time{}
+		if tr := t.r.opts.Trace; tr != nil {
+			go tr(t.owner.peer.ID(), fmt.Sprintf("track %d layer %d: ingress late, unavailable for %v", t.id, l.id, l.penalty))
+		}
+		return
+	}
+	if l.healthySince.IsZero() {
+		l.healthySince = now
+	}
+}
+
+func (l *layerState) healthyLocked(now time.Time) bool { return !now.Before(l.unhealthyUntil) }
+
+func (l *layerState) healthy(now time.Time) bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.healthyLocked(now)
 }

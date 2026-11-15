@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"io"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -22,9 +23,11 @@ import (
 )
 
 var (
-	ErrClosed       = errors.New("client: closed")
-	ErrNeedKeyframe = errors.New("client: a group must start with a keyframe")
-	ErrNoLayer      = errors.New("client: no such layer")
+	ErrClosed        = errors.New("client: closed")
+	ErrNeedKeyframe  = errors.New("client: a group must start with a keyframe")
+	ErrNoLayer       = errors.New("client: no such layer")
+	ErrLayerInactive = errors.New("client: nobody is watching this layer")
+	ErrBackpressure  = errors.New("client: send queue full, dropping until the next keyframe")
 )
 
 // ServerError is an Error message from the server.
@@ -62,6 +65,16 @@ type Options struct {
 	OnGroupEnd func(trackID, layer uint32, group uint64, complete bool)
 	// Events buffer size (default 256). Events must be consumed.
 	EventBuffer int
+
+	// TokenSource, if set, is called for a fresh token shortly before the
+	// current one expires (and when the server says it has); the SDK then
+	// sends Refresh.
+	TokenSource func(ctx context.Context) (string, error)
+	// NoReceiverReports turns off the once-a-second ReceiverReport per
+	// subscribed track (the server's bandwidth control uses them).
+	NoReceiverReports bool
+	// ReportInterval for ReceiverReports (default 1s).
+	ReportInterval time.Duration
 }
 
 // Client is one connection to quicvideod.
@@ -74,13 +87,21 @@ type Client struct {
 
 	writeMu sync.Mutex
 
-	mu       sync.Mutex
-	joinWait chan *controlpb.ControlMessage
-	pubWait  map[string]chan *controlpb.ControlMessage
-	local    map[uint32]*LocalTrack
-	nextRef  atomic.Uint64
-	closed   chan struct{}
-	closeErr error
+	mu          sync.Mutex
+	joinWait    chan *controlpb.ControlMessage
+	pubWait     map[string]chan *controlpb.ControlMessage
+	refreshWait chan *controlpb.ControlMessage
+	local       map[uint32]*LocalTrack
+	tracks      map[uint32]*controlpb.Track             // remote tracks in the room
+	subStates   map[uint32]*controlpb.SubscriptionState // latest per subscribed track
+	recv        map[uint32]*recvStats                   // per subscribed track
+	expiresAt   time.Time
+	refreshKick chan struct{}
+	// LayerActive for a track whose PublishOK hasn't been processed yet.
+	earlyActive map[uint32]map[uint32]bool
+	nextRef     atomic.Uint64
+	closed      chan struct{}
+	closeErr    error
 }
 
 // QUICConfig is the client's quic-go config.
@@ -120,10 +141,14 @@ func Dial(ctx context.Context, addr string, opts Options) (*Client, error) {
 	}
 	c := &Client{
 		conn: conn, ctrl: ctrl, opts: opts,
-		events:  make(chan *controlpb.ControlMessage, opts.EventBuffer),
-		pubWait: map[string]chan *controlpb.ControlMessage{},
-		local:   map[uint32]*LocalTrack{},
-		closed:  make(chan struct{}),
+		events:      make(chan *controlpb.ControlMessage, opts.EventBuffer),
+		pubWait:     map[string]chan *controlpb.ControlMessage{},
+		local:       map[uint32]*LocalTrack{},
+		tracks:      map[uint32]*controlpb.Track{},
+		subStates:   map[uint32]*controlpb.SubscriptionState{},
+		recv:        map[uint32]*recvStats{},
+		closed:      make(chan struct{}),
+		refreshKick: make(chan struct{}, 1),
 	}
 	if err := c.send(&controlpb.ControlMessage{Msg: &controlpb.ControlMessage_Hello{Hello: &controlpb.Hello{
 		Token: opts.Token, ClientVersion: opts.ClientVersion}}}); err != nil {
@@ -148,8 +173,20 @@ func Dial(ctx context.Context, addr string, opts Options) (*Client, error) {
 		_ = conn.CloseWithError(1, "expected welcome")
 		return nil, errors.New("client: expected Welcome")
 	}
+	if exp := c.welcome.GetTokenExpiresAt(); exp > 0 {
+		c.expiresAt = time.Unix(exp, 0)
+	}
+	if c.opts.ReportInterval <= 0 {
+		c.opts.ReportInterval = time.Second
+	}
 	go c.readLoop(rd)
 	go c.acceptMedia()
+	if !c.opts.NoReceiverReports {
+		go c.reportLoop()
+	}
+	if c.opts.TokenSource != nil {
+		go c.refreshLoop()
+	}
 	return c, nil
 }
 
@@ -192,6 +229,11 @@ func (c *Client) Join(ctx context.Context, room string) (*controlpb.RoomState, e
 		if e := m.GetError(); e != nil {
 			return nil, &ServerError{e}
 		}
+		c.mu.Lock()
+		for _, t := range m.GetRoomState().GetTracks() {
+			c.tracks[t.GetTrackId()] = t
+		}
+		c.mu.Unlock()
 		return m.GetRoomState(), nil
 	case <-ctx.Done():
 		return nil, ctx.Err()
@@ -204,21 +246,37 @@ func (c *Client) Join(ctx context.Context, room string) (*controlpb.RoomState, e
 func (c *Client) Leave() error {
 	c.mu.Lock()
 	for id, t := range c.local {
-		t.closeStreams()
+		t.stop()
 		delete(c.local, id)
 	}
+	clear(c.tracks)
+	clear(c.recv)
+	clear(c.subStates)
 	c.mu.Unlock()
 	return c.send(&controlpb.ControlMessage{Msg: &controlpb.ControlMessage_Leave{Leave: &controlpb.Leave{}}})
 }
 
-// Subscribe asks for a track's layer. priority 0 = server default; 1..7 =
-// QUIC urgency (lower first). Calling it again switches layer/priority.
-func (c *Client) Subscribe(trackID, layer, priority uint32) error {
+// Subscribe asks for a track. maxLayer is the best layer wanted (e.g.
+// what fits the tile); the server forwards the best layer at or below it
+// that the connection can take, and reports it in SubscriptionState
+// events. priority 0 = server default; 1..7 = QUIC urgency (lower first).
+// Calling it again changes max layer/priority.
+func (c *Client) Subscribe(trackID, maxLayer, priority uint32) error {
+	c.mu.Lock()
+	if c.recv[trackID] == nil {
+		c.recv[trackID] = newRecvStats()
+	}
+	c.mu.Unlock()
+	layer := maxLayer
 	return c.send(&controlpb.ControlMessage{Msg: &controlpb.ControlMessage_Subscribe{Subscribe: &controlpb.Subscribe{
 		TrackId: trackID, Layer: layer, Priority: priority}}})
 }
 
 func (c *Client) Unsubscribe(trackID uint32) error {
+	c.mu.Lock()
+	delete(c.recv, trackID)
+	delete(c.subStates, trackID)
+	c.mu.Unlock()
 	return c.send(&controlpb.ControlMessage{Msg: &controlpb.ControlMessage_Unsubscribe{Unsubscribe: &controlpb.Unsubscribe{TrackId: trackID}}})
 }
 
@@ -228,7 +286,11 @@ func (c *Client) Ping(id uint64) error {
 }
 
 // Publish announces a track and returns it once the server accepts it.
-func (c *Client) Publish(ctx context.Context, kind controlpb.TrackKind, codec string, layers []*controlpb.Layer) (*LocalTrack, error) {
+func (c *Client) Publish(ctx context.Context, kind controlpb.TrackKind, codec string, layers []*controlpb.Layer, opts ...PublishOptions) (*LocalTrack, error) {
+	var popts PublishOptions
+	if len(opts) > 0 {
+		popts = opts[0]
+	}
 	ref := strconv.FormatUint(c.nextRef.Add(1), 10)
 	ch := make(chan *controlpb.ControlMessage, 1)
 	c.mu.Lock()
@@ -254,18 +316,15 @@ func (c *Client) Publish(ctx context.Context, kind controlpb.TrackKind, codec st
 	if e := m.GetError(); e != nil {
 		return nil, &ServerError{e}
 	}
-	urgency := int8(4)
-	if kind == controlpb.TrackKind_SCREEN {
-		urgency = 1
-	}
-	t := &LocalTrack{c: c, id: m.GetPublishOk().GetTrackId(), urgency: urgency, layers: map[uint32]*localLayer{},
-		kfReq: make(chan uint32, 16)}
-	for _, l := range layers {
-		t.layers[l.GetId()] = &localLayer{}
-	}
+	t := newLocalTrack(c, m.GetPublishOk().GetTrackId(), kind, layers, popts)
 	c.mu.Lock()
 	c.local[t.id] = t
+	early := c.earlyActive[t.id]
+	delete(c.earlyActive, t.id)
 	c.mu.Unlock()
+	for layer, active := range early {
+		t.setActive(layer, active)
+	}
 	return t, nil
 }
 
@@ -296,20 +355,70 @@ func (c *Client) readLoop(rd *wire.ControlReader) {
 			if ref := x.Error.GetClientRef(); ref != "" && c.resolvePublish(ref, m) {
 				continue
 			}
+			if x.Error.GetCode() == controlpb.Error_TOKEN_EXPIRED && !x.Error.GetFatal() {
+				select {
+				case c.refreshKick <- struct{}{}:
+				default:
+				}
+			}
+			if c.resolveRefresh(m) {
+				continue
+			}
 			if c.resolveJoin(m) {
 				continue
 			}
 			c.emit(m)
 		case *controlpb.ControlMessage_KeyframeRequest:
+			if t := c.localTrack(x.KeyframeRequest.GetTrackId()); t != nil {
+				t.keyframeNeeded(x.KeyframeRequest.GetLayer())
+			}
+		case *controlpb.ControlMessage_LayerActive:
+			la := x.LayerActive
 			c.mu.Lock()
-			t := c.local[x.KeyframeRequest.GetTrackId()]
+			t := c.local[la.GetTrackId()]
+			if t == nil {
+				if c.earlyActive == nil {
+					c.earlyActive = map[uint32]map[uint32]bool{}
+				}
+				if c.earlyActive[la.GetTrackId()] == nil {
+					c.earlyActive[la.GetTrackId()] = map[uint32]bool{}
+				}
+				c.earlyActive[la.GetTrackId()][la.GetLayer()] = la.GetActive()
+			}
 			c.mu.Unlock()
 			if t != nil {
-				select {
-				case t.kfReq <- x.KeyframeRequest.GetLayer():
-				default:
-				}
+				t.setActive(la.GetLayer(), la.GetActive())
 			}
+		case *controlpb.ControlMessage_SubscriptionState:
+			c.mu.Lock()
+			if _, ok := c.recv[x.SubscriptionState.GetTrackId()]; ok {
+				c.subStates[x.SubscriptionState.GetTrackId()] = x.SubscriptionState
+			}
+			c.mu.Unlock()
+			c.emit(m)
+		case *controlpb.ControlMessage_RefreshOk:
+			c.mu.Lock()
+			if exp := x.RefreshOk.GetTokenExpiresAt(); exp > 0 {
+				c.expiresAt = time.Unix(exp, 0)
+			}
+			ch := c.refreshWait
+			c.refreshWait = nil
+			c.mu.Unlock()
+			if ch != nil {
+				ch <- m
+			}
+		case *controlpb.ControlMessage_TrackAdded:
+			c.mu.Lock()
+			c.tracks[x.TrackAdded.GetTrack().GetTrackId()] = x.TrackAdded.GetTrack()
+			c.mu.Unlock()
+			c.emit(m)
+		case *controlpb.ControlMessage_TrackRemoved:
+			c.mu.Lock()
+			delete(c.tracks, x.TrackRemoved.GetTrackId())
+			delete(c.recv, x.TrackRemoved.GetTrackId())
+			delete(c.subStates, x.TrackRemoved.GetTrackId())
+			c.mu.Unlock()
+			c.emit(m)
 		case *controlpb.ControlMessage_Pong:
 		default:
 			c.emit(m)
@@ -374,11 +483,15 @@ func (c *Client) readGroup(st *quic.ReceiveStream) {
 			if !complete {
 				st.CancelRead(wire.StreamCodeGone)
 			}
+			if !complete {
+				c.observeCut(h.TrackID)
+			}
 			if c.opts.OnGroupEnd != nil {
 				c.opts.OnGroupEnd(h.TrackID, h.Layer, h.Group, complete)
 			}
 			return
 		}
+		c.observeFrame(h.TrackID, h.Layer, f)
 		if c.opts.OnFrame != nil {
 			c.opts.OnFrame(RemoteFrame{TrackID: h.TrackID, Layer: h.Layer, Group: h.Group, GroupStart: first, Frame: *f})
 		}
@@ -386,110 +499,103 @@ func (c *Client) readGroup(st *quic.ReceiveStream) {
 	}
 }
 
-// LocalTrack is a published track.
-type LocalTrack struct {
-	c       *Client
-	id      uint32
-	urgency int8
-	layers  map[uint32]*localLayer
-	kfReq   chan uint32
+func (c *Client) localTrack(id uint32) *LocalTrack {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.local[id]
 }
 
-type localLayer struct {
-	mu     sync.Mutex
-	st     *quic.SendStream
-	group  uint64
-	hdrBuf []byte
+// SubscriptionState is the server's latest report on a subscription (nil
+// until the first one).
+func (c *Client) SubscriptionState(trackID uint32) *controlpb.SubscriptionState {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.subStates[trackID]
 }
 
-func (t *LocalTrack) ID() uint32 { return t.id }
+// Track is a remote track's description (nil if unknown).
+func (c *Client) Track(trackID uint32) *controlpb.Track {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.tracks[trackID]
+}
 
-// KeyframeRequests delivers layer ids the server wants a keyframe on (a
-// subscriber joined without a cached group, or one was dropped).
-func (t *LocalTrack) KeyframeRequests() <-chan uint32 { return t.kfReq }
+// TokenExpiresAt is when the session's token expires (zero = never).
+func (c *Client) TokenExpiresAt() time.Time {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.expiresAt
+}
 
-// WriteFrame sends one encoded frame on a layer. A keyframe starts a new
-// group (a new stream); other frames continue the current one. If the
-// server dropped the current group, it returns the write error and the
-// next keyframe starts over. captureUS = 0 uses the current time.
-func (t *LocalTrack) WriteFrame(layer uint32, keyframe bool, captureUS uint64, payload []byte) error {
-	l := t.layers[layer]
-	if l == nil {
-		return ErrNoLayer
+// Refresh sends a fresh token for this session (same user) and waits for
+// the server to accept it.
+func (c *Client) Refresh(ctx context.Context, token string) error {
+	ch := make(chan *controlpb.ControlMessage, 1)
+	c.mu.Lock()
+	c.refreshWait = ch
+	c.mu.Unlock()
+	if err := c.send(&controlpb.ControlMessage{Msg: &controlpb.ControlMessage_Refresh{Refresh: &controlpb.Refresh{Token: token}}}); err != nil {
+		return err
 	}
-	if captureUS == 0 {
-		captureUS = uint64(time.Now().UnixMicro())
-	}
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	if keyframe {
-		if l.st != nil {
-			_ = l.st.Close()
+	select {
+	case m := <-ch:
+		if e := m.GetError(); e != nil {
+			return &ServerError{e}
 		}
-		st, err := t.c.conn.OpenUniStream()
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-c.closed:
+		return ErrClosed
+	}
+}
+
+func (c *Client) resolveRefresh(m *controlpb.ControlMessage) bool {
+	if !strings.HasPrefix(m.GetError().GetMessage(), "refresh:") {
+		return false
+	}
+	c.mu.Lock()
+	ch := c.refreshWait
+	c.refreshWait = nil
+	c.mu.Unlock()
+	if ch == nil {
+		return false
+	}
+	ch <- m
+	return true
+}
+
+// refreshLoop renews the token a minute before it expires (or at 80% of a
+// shorter lifetime), and right away when the server warns it has expired.
+func (c *Client) refreshLoop() {
+	for {
+		exp := c.TokenExpiresAt()
+		var wait <-chan time.Time
+		if !exp.IsZero() {
+			lead := time.Minute
+			if life := time.Until(exp); life < 5*time.Minute {
+				lead = life / 5
+			}
+			wait = time.After(max(time.Until(exp)-lead, 0))
+		}
+		select {
+		case <-c.closed:
+			return
+		case <-wait:
+		case <-c.refreshKick:
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		tok, err := c.opts.TokenSource(ctx)
+		if err == nil {
+			err = c.Refresh(ctx, tok)
+		}
+		cancel()
 		if err != nil {
-			// Stream limit reached: wait for one (rare; the server allows 256).
-			ctx, cancel := context.WithTimeout(t.c.conn.Context(), 2*time.Second)
-			st, err = t.c.conn.OpenUniStreamSync(ctx)
-			cancel()
-			if err != nil {
-				l.st = nil
-				return err
+			select {
+			case <-c.closed:
+				return
+			case <-time.After(5 * time.Second): // retry
 			}
 		}
-		st.SetPriority(t.urgency, false)
-		l.group++
-		l.st = st
-		l.hdrBuf = wire.AppendGroupHeader(l.hdrBuf[:0], wire.GroupHeader{TrackID: t.id, Layer: layer, Group: l.group})
-		if _, err := st.Write(l.hdrBuf); err != nil {
-			l.st = nil
-			return err
-		}
-	} else if l.st == nil {
-		return ErrNeedKeyframe
 	}
-	f := wire.Frame{Keyframe: keyframe, CaptureUS: captureUS, Payload: payload}
-	l.hdrBuf = wire.AppendFrameHeader(l.hdrBuf[:0], &f)
-	_, err := l.st.Write(l.hdrBuf)
-	if err == nil {
-		_, err = l.st.Write(payload)
-	}
-	if err != nil {
-		l.st.CancelWrite(wire.StreamCodeGone)
-		l.st = nil
-	}
-	return err
-}
-
-// EndGroup closes the current group on a layer without starting a new one
-// (e.g. the encoder is paused).
-func (t *LocalTrack) EndGroup(layer uint32) {
-	if l := t.layers[layer]; l != nil {
-		l.mu.Lock()
-		if l.st != nil {
-			_ = l.st.Close()
-			l.st = nil
-		}
-		l.mu.Unlock()
-	}
-}
-
-func (t *LocalTrack) closeStreams() {
-	for _, l := range t.layers {
-		l.mu.Lock()
-		if l.st != nil {
-			l.st.CancelWrite(wire.StreamCodeGone)
-			l.st = nil
-		}
-		l.mu.Unlock()
-	}
-}
-
-// Unpublish stops the track.
-func (t *LocalTrack) Unpublish() error {
-	t.closeStreams()
-	t.c.mu.Lock()
-	delete(t.c.local, t.id)
-	t.c.mu.Unlock()
-	return t.c.send(&controlpb.ControlMessage{Msg: &controlpb.ControlMessage_Unpublish{Unpublish: &controlpb.Unpublish{TrackId: t.id}}})
 }

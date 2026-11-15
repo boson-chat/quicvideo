@@ -72,6 +72,9 @@ type AuthConfig struct {
 	JWKSURL  string `env:"AUTH_JWKS_URL"`
 	Issuer   string `env:"AUTH_ISSUER"`
 	Audience string `default:"quicvideo" env:"AUTH_AUDIENCE"`
+	// After the token expires the client is warned and has this long to
+	// send Refresh before the session is closed.
+	TokenGrace time.Duration `default:"30s" env:"TOKEN_GRACE"`
 }
 
 type RoomConfig struct {
@@ -96,6 +99,18 @@ type RelayConfig struct {
 	SubQueueBytes int `default:"2097152" env:"SUB_QUEUE_BYTES"`
 	// Minimum interval between keyframe requests for one layer.
 	KeyframeRequestInterval time.Duration `default:"1s" env:"KEYFRAME_REQUEST_INTERVAL"`
+
+	// Bandwidth control per subscriber (docs/design.md).
+	InitialBitrate   float64       `default:"2500000" env:"INITIAL_BITRATE"`
+	MinBitrate       float64       `default:"150000" env:"MIN_BITRATE"`
+	BacklogDown      time.Duration `default:"150ms" env:"BACKLOG_DOWN"`
+	QueueDelayDown   time.Duration `default:"250ms" env:"QUEUE_DELAY_DOWN"`
+	UpHold           time.Duration `default:"6s" env:"UP_HOLD"`
+	StartupHold      time.Duration `default:"2s" env:"STARTUP_HOLD"`
+	MaxHold          time.Duration `default:"40s" env:"MAX_HOLD"`
+	LayerIdleTimeout time.Duration `default:"2s" env:"LAYER_IDLE_TIMEOUT"`
+	// Log every controller decision (step down / probe) at info level.
+	TraceController bool `default:"false" env:"TRACE_CONTROLLER"`
 }
 
 func LoadConfig() (Config, error) {

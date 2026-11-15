@@ -61,7 +61,13 @@ var serveCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
-		r := relay.New(ctx, RelayOptions(cfg, m))
+		ropts := RelayOptions(cfg, m)
+		if cfg.RelayConfig.TraceController {
+			ropts.Trace = func(session uint32, msg string) {
+				l.Info().Uint32("session", session).Msg("controller " + msg)
+			}
+		}
+		r := relay.New(ctx, ropts)
 		quicServer := transport.NewServer(cfg, tlsConf, authService, r, m)
 
 		g, gctx := errgroup.WithContext(ctx)
@@ -88,6 +94,14 @@ func RelayOptions(cfg config.Config, m *metrics.Metrics) relay.Options {
 		GroupCacheBytes:         rc.GroupCacheBytes,
 		SubQueueBytes:           rc.SubQueueBytes,
 		KeyframeRequestInterval: rc.KeyframeRequestInterval,
+		InitialBitrate:          rc.InitialBitrate,
+		MinBitrate:              rc.MinBitrate,
+		BacklogDown:             rc.BacklogDown,
+		QueueDelayDown:          rc.QueueDelayDown,
+		UpHold:                  rc.UpHold,
+		StartupHold:             rc.StartupHold,
+		MaxHold:                 rc.MaxHold,
+		LayerIdleTimeout:        rc.LayerIdleTimeout,
 		Metrics:                 m,
 	}
 }

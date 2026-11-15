@@ -29,10 +29,11 @@ const (
 	DropRateLimit                      // publisher over its declared bitrate
 	DropNoSubscriber                   // subscriber not ready (waiting for a keyframe)
 	DropWriteError                     // stream write failed (peer reset, connection gone)
+	DropPaused                         // subscription paused for bandwidth
 	numDropReasons
 )
 
-var dropNames = [numDropReasons]string{"superseded", "overflow", "stale", "rate_limit", "waiting_keyframe", "write_error"}
+var dropNames = [numDropReasons]string{"superseded", "overflow", "stale", "rate_limit", "waiting_keyframe", "write_error", "paused"}
 
 func (r DropReason) String() string { return dropNames[r] }
 
@@ -87,6 +88,10 @@ type Metrics struct {
 
 	keyframeRequests atomic.Int64
 	layerSwitches    atomic.Int64
+	estimateDown     atomic.Int64
+	estimateUp       atomic.Int64
+	tokenExpired     atomic.Int64
+	tokenRefreshed   atomic.Int64
 }
 
 // Nop returns metrics that are counted but never exported (tests).
@@ -160,6 +165,14 @@ func New(mp metric.MeterProvider) (*Metrics, error) {
 		counter("quicvideo.dropped.groups", "{group}", "Groups cut short by reason", byDrop(&m.droppedGroups)),
 		counter("quicvideo.keyframe_requests", "{request}", "Keyframe requests sent to publishers", one(&m.keyframeRequests)),
 		counter("quicvideo.layer_switches", "{switch}", "Subscriber layer switches", one(&m.layerSwitches)),
+		counter("quicvideo.estimate.changes", "{change}", "Bandwidth estimate changes (down = congestion, up = probe)", func(o metric.Int64Observer) {
+			o.Observe(m.estimateDown.Load(), metric.WithAttributes(attribute.String("direction", "down")))
+			o.Observe(m.estimateUp.Load(), metric.WithAttributes(attribute.String("direction", "up")))
+		}),
+		counter("quicvideo.tokens", "{token}", "Token lifecycle events", func(o metric.Int64Observer) {
+			o.Observe(m.tokenExpired.Load(), metric.WithAttributes(attribute.String("event", "expired")))
+			o.Observe(m.tokenRefreshed.Load(), metric.WithAttributes(attribute.String("event", "refreshed")))
+		}),
 	}
 	for _, err := range regs {
 		if err != nil {
@@ -206,6 +219,7 @@ type Snapshot struct {
 	EgressBytes, EgressFrames, EgressGroups int64
 	DroppedFrames, DroppedGroups            map[string]int64
 	KeyframeRequests, LayerSwitches         int64
+	EstimateDown, EstimateUp                int64
 }
 
 func (m *Metrics) Snapshot() Snapshot {
@@ -216,6 +230,7 @@ func (m *Metrics) Snapshot() Snapshot {
 		EgressBytes: m.egressBytes.Load(), EgressFrames: m.egressFrames.Load(), EgressGroups: m.egressGroups.Load(),
 		DroppedFrames: map[string]int64{}, DroppedGroups: map[string]int64{},
 		KeyframeRequests: m.keyframeRequests.Load(), LayerSwitches: m.layerSwitches.Load(),
+		EstimateDown: m.estimateDown.Load(), EstimateUp: m.estimateUp.Load(),
 	}
 	for r := range m.droppedFrames {
 		if v := m.droppedFrames[r].Load(); v > 0 {
@@ -227,3 +242,8 @@ func (m *Metrics) Snapshot() Snapshot {
 	}
 	return s
 }
+
+func (m *Metrics) EstimateDown()   { m.estimateDown.Add(1) }
+func (m *Metrics) EstimateUp()     { m.estimateUp.Add(1) }
+func (m *Metrics) TokenExpired()   { m.tokenExpired.Add(1) }
+func (m *Metrics) TokenRefreshed() { m.tokenRefreshed.Add(1) }

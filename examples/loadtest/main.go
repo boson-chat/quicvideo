@@ -195,6 +195,9 @@ func runPublisher(ctx context.Context, c *client.Client, layers []*controlpb.Lay
 					return
 				case <-tick.C:
 				}
+				if !track.LayerActive(uint32(i)) {
+					continue
+				}
 				mu.Lock()
 				size, key := srcs[i].Next()
 				mu.Unlock()

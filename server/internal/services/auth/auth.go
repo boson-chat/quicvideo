@@ -6,6 +6,7 @@ import (
 	"errors"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/golang-jwt/jwt/v5"
 )
@@ -41,6 +42,8 @@ type Identity struct {
 	// even as [].
 	Perms    []string
 	HasPerms bool
+	// ExpiresAt is the token's exp (zero = never, e.g. insecure dev tokens).
+	ExpiresAt time.Time
 }
 
 func (i *Identity) CanJoin(room string) bool {
@@ -97,6 +100,9 @@ func identityFromClaims(c *Claims, err error) (*Identity, error) {
 		name = c.Subject
 	}
 	id := &Identity{UserID: c.Subject, DisplayName: name, Role: ParseRole(c.Role), Rooms: c.Rooms}
+	if c.ExpiresAt != nil {
+		id.ExpiresAt = c.ExpiresAt.Time
+	}
 	if c.Perms != nil {
 		id.HasPerms = true
 		for _, p := range *c.Perms {

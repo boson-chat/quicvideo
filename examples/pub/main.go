@@ -14,6 +14,7 @@ import (
 	"log"
 	"os"
 	"os/signal"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -97,18 +98,26 @@ func main() {
 	for i, l := range layers {
 		sources[i] = synth.NewSource(l, int(gop.Seconds()*float64(l.GetFps())))
 	}
+	// Keyframe needed (server request, layer activated, or our send queue
+	// dropped frames): synthetic layers make one now; file layers jump to
+	// the next IDR.
+	jump := make([]bool, len(layers))
 	go func() {
 		for l := range track.KeyframeRequests() {
-			if int(l) < len(sources) && aus == nil {
-				mu.Lock()
-				sources[l].ForceKeyframe()
-				mu.Unlock()
+			if int(l) >= len(sources) {
+				continue
 			}
+			mu.Lock()
+			if aus == nil {
+				sources[l].ForceKeyframe()
+			} else {
+				jump[l] = true
+			}
+			mu.Unlock()
 		}
 	}()
 
 	var wg sync.WaitGroup
-	var sent [8]int64
 	for i, l := range layers {
 		wg.Add(1)
 		go func() {
@@ -122,9 +131,21 @@ func main() {
 					return
 				case <-tick.C:
 				}
+				if !track.LayerActive(uint32(i)) {
+					// Nobody watches this layer: don't "encode" it at all.
+					continue
+				}
 				var payload []byte
 				var key bool
 				if aus != nil {
+					mu.Lock()
+					if jump[i] {
+						jump[i] = false
+						for !aus[i][n%len(aus[i])].Keyframe {
+							n++
+						}
+					}
+					mu.Unlock()
 					au := aus[i][n%len(aus[i])]
 					payload, key = au.Data, au.Keyframe
 					n++
@@ -134,16 +155,9 @@ func main() {
 					mu.Unlock()
 					payload, key = synth.Payload(size), k
 				}
-				if err := track.WriteFrame(uint32(i), key, 0, payload); err != nil && ctx.Err() == nil {
-					if err == client.ErrNeedKeyframe {
-						continue
-					}
-					log.Printf("layer %d: %v", i, err)
-					continue
+				if err := track.WriteFrame(uint32(i), key, 0, payload); err != nil {
+					continue // inactive, waiting for a keyframe, or backpressure (see stats)
 				}
-				mu.Lock()
-				sent[i] += int64(len(payload))
-				mu.Unlock()
 			}
 		}()
 	}
@@ -158,12 +172,16 @@ func main() {
 		case <-c.Done():
 			log.Fatalf("connection closed: %v", c.Err())
 		case <-t.C:
-			mu.Lock()
 			var parts []string
-			for i := range layers {
-				parts = append(parts, fmt.Sprintf("L%d %.0f kbps", i, float64(sent[i])*8/time.Since(start).Seconds()/1000))
+			for _, st := range track.Stats() {
+				state := "off"
+				if st.Active {
+					state = "on"
+				}
+				parts = append(parts, fmt.Sprintf("L%d %s %.0f kbps (dropped %d, queue %v)", st.Layer, state,
+					float64(st.BytesSent)*8/time.Since(start).Seconds()/1000, st.FramesDropped, st.QueueDelay.Round(time.Millisecond)))
 			}
-			mu.Unlock()
+			sort.Strings(parts)
 			log.Print(strings.Join(parts, "  "))
 		}
 	}
