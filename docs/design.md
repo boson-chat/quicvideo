@@ -278,6 +278,25 @@ If an encoder doesn't repeat SPS/PPS in-band on keyframes, the sequence header f
 
 **Untested anywhere:** hardware encoder MFTs (the asynchronous path) and real webcams.
 
+## Browsers (WebTransport)
+
+The QUIC listener negotiates ALPN `boson-video/1` (native) or `h3`. HTTP/3 connections go to webtransport-go, whose `/wt` handler upgrades the CONNECT request into a session. The quicvideo session code doesn't care which it's talking to: both implement one small connection interface (control stream, accept/open group streams, close, stats).
+- **Priorities:** `SetPriority` reaches the QUIC stream under a WebTransport stream (vendored patch), so screen shares still go first.
+- **Controller:** the bandwidth controller gets no RTT/loss stats from a WebTransport session. It falls back to backlog, cuts and receiver reports.
+
+The browser client (`web/src/client.ts`):
+- **Protocol:** the same protobuf control messages (protobuf-es, generated from `proto/control.proto`) and the same media stream format.
+- **Capture:** frames come through `MediaStreamTrackProcessor` where it exists (Chromium), else from a `<video>` drawn at the layer rate.
+- **Encode:** each active layer gets an OffscreenCanvas scaled to its size and a `VideoEncoder` (H.264 Constrained Baseline, Annex-B, `latencyMode: "realtime"`, CBR-ish bitrate, keyframes on request).
+- **Send:** each group goes on a new unidirectional stream; `sendOrder` sends lower layers first. A backed-up stream drops frames until the next keyframe.
+- **Receive:** a `VideoDecoder` per remote track, fed only the newest group (same rule as the Go viewer). Frames are drawn to canvases.
+
+**Tested:** `web/tests/demo.spec.ts` (Playwright, Chromium with fake devices). The setup starts quicvideod and a Go bot publishing real H.264 (the ffmpeg test pattern).
+- Alice's page publishes the fake camera and a `getDisplayMedia` share (Chromium's fake device stands in for the screen, so it shows the same feed).
+- Bob's page decodes all three tracks: the Go bot, Alice's camera and Alice's screen. It's the screenshot artifact of the CI `web` job.
+- Alice only encodes the layers Bob watches.
+- A Go test (`TestWebTransportSession`) also checks the stream mapping both ways at the protocol level.
+
 ## Phases
 
 1. **Done: relay working end to end.** Wire format, relay, Go SDK, pub/sub bots (synthetic and real H.264), load test, metrics.
@@ -288,7 +307,7 @@ If an encoder doesn't repeat SPS/PPS in-band on keyframes, the sequence header f
    - **Windows: done (CI-only).** Windows.Graphics.Capture, Media Foundation.
 
    The viewer (Gio) is shared.
-4. **Browsers.** WebTransport + WebCodecs on the same stream-per-group design.
+4. **Done: browsers.** A WebTransport endpoint on the same port (HTTP/3, `/wt`), and a TypeScript client + demo with WebCodecs. Tested in Chromium with Playwright.
 5. **Merge with voice.** quicvoiced issues short-lived video tickets (Ed25519/JWKS) for the voice room you're in, so the video server never has to call auth or Ergo. One call UI, a `video` profile in boson-chat/stack, and the option to run it on a separate server.
 
 **Dropped: direct P2P for 2–4 person calls.** It was planned as a later phase. Direct QUIC between participants, with hole punching coordinated over the relay, would have saved relay bandwidth for the smallest calls, at the cost of a second media path to build, test and debug (NAT traversal, fallback, per-peer rate control). At the friends-call scale the relay's cost is small (see the load test), so it was taken out of the plan.
