@@ -71,6 +71,11 @@ type CameraFormat struct {
 	MaxFPS        int
 }
 
+// PortalPicker as a ScreenOptions.DisplayID means "let the system's
+// screen-share picker choose" (Linux/Wayland: xdg-desktop-portal). Where
+// there's no system picker it means the main display.
+const PortalPicker = 0xFFFFFFFF
+
 // ScreenOptions select what to capture. Set DisplayID or WindowID (both
 // zero = the main display).
 type ScreenOptions struct {

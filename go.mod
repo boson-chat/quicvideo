@@ -5,6 +5,7 @@ go 1.27.1
 require (
 	gioui.org v0.10.3
 	github.com/MicahParks/keyfunc/v3 v3.9.2
+	github.com/godbus/dbus/v5 v5.2.4
 	github.com/golang-jwt/jwt/v5 v5.3.1
 	github.com/jinzhu/configor v1.2.2
 	github.com/prometheus/client_golang v1.25.0
@@ -33,7 +34,6 @@ require (
 	github.com/go-logr/logr v1.4.4 // indirect
 	github.com/go-logr/stdr v1.2.2 // indirect
 	github.com/go-text/typesetting v0.3.5 // indirect
-	github.com/godbus/dbus/v5 v5.2.2 // indirect
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/grpc-ecosystem/grpc-gateway/v2 v2.30.0 // indirect
 	github.com/inconshreveable/mousetrap v1.1.0 // indirect

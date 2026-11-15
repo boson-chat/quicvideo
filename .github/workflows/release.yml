@@ -33,8 +33,12 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
-      - name: Gio (examples/viewer) needs X11/Wayland/EGL headers
-        run: sudo apt-get update -qq && sudo apt-get install -y -qq libwayland-dev libx11-dev libx11-xcb-dev libxkbcommon-x11-dev libgles2-mesa-dev libegl1-mesa-dev libffi-dev libxcursor-dev libvulkan-dev
+      - name: Native deps (Gio UI; FFmpeg, openh264, PipeWire for client/media on Linux)
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq libwayland-dev libx11-dev libx11-xcb-dev libxkbcommon-x11-dev libgles2-mesa-dev \
+            libegl1-mesa-dev libffi-dev libxcursor-dev libvulkan-dev \
+            libavcodec-dev libavformat-dev libavdevice-dev libavutil-dev libswscale-dev libopenh264-dev libpipewire-0.3-dev
       - run: go test -race ./...
 
   release:
