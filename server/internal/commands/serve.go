@@ -79,6 +79,15 @@ var serveCmd = &cobra.Command{
 		g.Go(func() error {
 			return http.StartServerWithContext(gctx, cfg.HTTPConfig.Addr, cfg.AppConfig.Version, provider.Handler())
 		})
+		if addr := cfg.HTTPConfig.ControlAddr; addr != "" {
+			if cfg.HTTPConfig.ControlToken == "" {
+				return errors.New("CONTROL_HTTP_ADDR needs CONTROL_TOKEN")
+			}
+			g.Go(func() error {
+				return http.StartControlServerWithContext(gctx, addr, r, http.ControlOptions{
+					Token: cfg.HTTPConfig.ControlToken, Strict: cfg.HTTPConfig.VoiceSyncStrict})
+			})
+		}
 		if addr := cfg.HTTPConfig.PublicAddr; addr != "" {
 			g.Go(func() error {
 				return http.StartPublicServerWithContext(gctx, addr, http.PublicOptions{DevCertHash: devCertHash(tlsConf), QUICPort: quicPort(cfg.QUICConfig.Addr)})

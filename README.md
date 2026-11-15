@@ -109,7 +109,9 @@ quicvideo vendors a patched [webtransport-go](third_party/webtransport-go/QUICVI
 | `TLS_CERT_FILE` / `TLS_KEY_FILE` | | cert files (reloaded on change); empty = self-signed dev cert |
 | `HTTP_ADDR` | `:8080` | internal: `/healthz`, `/version`, `/metrics` |
 | `PUBLIC_HTTP_ADDR` | `:8090` | public: `/healthz` |
-| `AUTH_JWKS_URL`, `AUTH_ISSUER`, `AUTH_AUDIENCE` | `quicvideo` audience | boson auth service tokens |
+| `AUTH_JWKS_URL`, `AUTH_ISSUER`, `AUTH_AUDIENCE` | `quicvideo` audience | token verification. The first two take comma-separated lists, e.g. the auth service's JWKS plus quicvoiced's video-ticket JWKS (`docs/voice-merge.md`) |
+| `CONTROL_HTTP_ADDR`, `CONTROL_TOKEN` | off | control listener for quicvoiced: `POST /v1/control/events` (leave / close) and `PUT /v1/control/rooms` (membership snapshot), bearer token |
+| `VOICE_SYNC` | `false` | with the control link, also empty video rooms that voice's snapshot doesn't list |
 | `JWT_SECRET` | | HS256 test tokens (`quicvideod token --user alice`) |
 | `AUTH_INSECURE` | `false` | dev only: any token = user id (`name@listener` = watch only) |
 | `ROOM_MAX_PARTICIPANTS` | `20` | |

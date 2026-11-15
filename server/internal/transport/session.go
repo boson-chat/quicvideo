@@ -233,10 +233,11 @@ func (ss *session) withMember(f func(*relay.Member) error) {
 func (ss *session) join(room string) {
 	ss.mu.Lock()
 	defer ss.mu.Unlock()
-	if ss.member != nil {
+	if ss.member != nil && ss.member.Room() != "" {
 		ss.SendControl(errMsg(controlpb.Error_PROTOCOL, "already in a room", false, ""))
 		return
 	}
+	ss.member = nil // removed by the server (e.g. left the voice channel): may join again
 	if !ss.ident.CanJoin(room) {
 		ss.SendControl(errMsg(controlpb.Error_FORBIDDEN, "token does not allow this room", false, ""))
 		return

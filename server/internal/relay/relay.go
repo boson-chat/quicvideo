@@ -201,6 +201,7 @@ type Member struct {
 	tracks map[uint32]*Track
 	subs   map[uint32]*Subscription // by track id
 
+	joinedAt time.Time
 	ctrl     *controller  // bandwidth estimate as a subscriber (Relay.mu)
 	bytesOut atomic.Int64 // bytes written by this member's forwarders
 	cuts     atomic.Int64 // same-layer group cuts (congestion)
@@ -244,7 +245,7 @@ func (r *Relay) Join(peer Peer, info Participant, roomName string) (*Member, *co
 		return nil, nil, ErrRoomFull
 	}
 	mem := &Member{r: r, peer: peer, info: info, room: rm, tracks: map[uint32]*Track{}, subs: map[uint32]*Subscription{},
-		ctrl: newController(&r.opts, r.opts.Now())}
+		ctrl: newController(&r.opts, r.opts.Now()), joinedAt: r.opts.Now()}
 	state := &controlpb.RoomState{Room: roomName, YourSessionId: peer.ID()}
 	for _, o := range rm.members {
 		state.Participants = append(state.Participants, o.participant())
@@ -261,9 +262,14 @@ func (r *Relay) Join(peer Peer, info Participant, roomName string) (*Member, *co
 // Leave removes the member: its subscriptions end, its tracks are
 // unpublished, the others get ParticipantLeft. Safe to call twice.
 func (m *Member) Leave(reason string) {
+	m.r.mu.Lock()
+	defer m.r.mu.Unlock()
+	m.leaveLocked(reason)
+}
+
+// leaveLocked is Leave with Relay.mu held.
+func (m *Member) leaveLocked(reason string) {
 	r := m.r
-	r.mu.Lock()
-	defer r.mu.Unlock()
 	rm := m.room
 	if rm == nil {
 		return
@@ -467,4 +473,76 @@ func (r *Relay) Stats() (rooms, tracks int) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return len(r.rooms), len(r.tracks)
+}
+
+// ---- voice-driven membership (quicvoiced's control link) -------------------
+
+// kickLocked tells the member why and removes it. Caller holds Relay.mu.
+func (m *Member) kickLocked(reason string) {
+	m.peer.SendControl(&controlpb.ControlMessage{Msg: &controlpb.ControlMessage_Error{Error: &controlpb.Error{
+		Code: controlpb.Error_KICKED, Message: reason}}})
+	m.leaveLocked(reason)
+}
+
+// KickUser removes a user's sessions from a room (they left the voice
+// channel). It returns how many sessions were removed.
+func (r *Relay) KickUser(room, userID, reason string) int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	rm := r.rooms[room]
+	if rm == nil {
+		return 0
+	}
+	n := 0
+	for _, m := range rm.members {
+		if m.info.UserID == userID {
+			m.kickLocked(reason)
+			n++
+		}
+	}
+	return n
+}
+
+// CloseRoom removes everyone from a room (the voice channel was closed).
+func (r *Relay) CloseRoom(room, reason string) int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	rm := r.rooms[room]
+	if rm == nil {
+		return 0
+	}
+	n := 0
+	for _, m := range rm.members {
+		m.kickLocked(reason)
+		n++
+	}
+	return n
+}
+
+// Sync applies voice's full membership snapshot (room → user ids): members
+// of a snapshotted room who aren't in it are removed, unless they joined
+// within grace (they may have joined voice after the snapshot was taken).
+// With strict, rooms missing from the snapshot are emptied too.
+func (r *Relay) Sync(snapshot map[string][]string, strict bool, grace time.Duration, reason string) int {
+	now := r.opts.Now()
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	n := 0
+	for name, rm := range r.rooms {
+		users, ok := snapshot[name]
+		if !ok && !strict {
+			continue
+		}
+		allowed := make(map[string]bool, len(users))
+		for _, u := range users {
+			allowed[u] = true
+		}
+		for _, m := range rm.members {
+			if !allowed[m.info.UserID] && now.Sub(m.joinedAt) >= grace {
+				m.kickLocked(reason)
+				n++
+			}
+		}
+	}
+	return n
 }
