@@ -10,6 +10,7 @@ import (
 
 	"github.com/MicahParks/keyfunc/v3"
 	"github.com/golang-jwt/jwt/v5"
+	"golang.org/x/time/rate"
 )
 
 // JWKSAuthService verifies asymmetric tokens (EdDSA/ES256/RS256) minted by
@@ -31,7 +32,19 @@ func NewJWKSAuthService(ctx context.Context, jwksURLs, issuers, audience string)
 	if len(urls) == 0 {
 		return nil, errors.New("auth: JWKS URL is empty")
 	}
-	k, err := keyfunc.NewDefaultCtx(ctx, urls)
+	// keyfunc's defaults allow one unknown-kid refresh per 5 minutes and
+	// queue other tokens behind it: the second of two tickets arriving
+	// together after a key change (or after the JWKS was down at boot) was
+	// rejected, and a failed refresh locked everyone out for 5 minutes.
+	// Instead: at most one refresh a second, tokens don't queue for it
+	// (RateLimitWaitMax ~0), and Verify retries for a moment so they pick
+	// up the key another caller's refresh fetched.
+	k, err := keyfunc.NewDefaultOverrideCtx(ctx, urls, keyfunc.Override{
+		RefreshUnknownKID: rate.NewLimiter(rate.Every(time.Second), 1),
+		RateLimitWaitMax:  time.Millisecond,
+		HTTPTimeout:       5 * time.Second,
+		RefreshInterval:   15 * time.Minute,
+	})
 	if err != nil {
 		return nil, fmt.Errorf("auth: JWKS %s: %w", jwksURLs, err)
 	}
@@ -48,7 +61,11 @@ func splitList(s string) []string {
 	return out
 }
 
-func (s *JWKSAuthService) Verify(_ context.Context, token string) (*Identity, error) {
+// unknownKeyRetry: how long Verify keeps retrying a token whose key isn't
+// in the JWKS yet (a refresh in flight or rate-limited), and how often.
+var unknownKeyRetry, unknownKeyEvery = 3 * time.Second, 200 * time.Millisecond
+
+func (s *JWKSAuthService) Verify(ctx context.Context, token string) (*Identity, error) {
 	opts := []jwt.ParserOption{
 		jwt.WithValidMethods([]string{"EdDSA", "ES256", "RS256"}),
 		jwt.WithExpirationRequired(),
@@ -59,6 +76,17 @@ func (s *JWKSAuthService) Verify(_ context.Context, token string) (*Identity, er
 	}
 	var c Claims
 	_, err := jwt.ParseWithClaims(token, &c, s.keys.Keyfunc, opts...)
+	// ErrTokenUnverifiable = no key for its kid (yet). A signature, expiry or
+	// audience failure isn't retried.
+	for deadline := time.Now().Add(unknownKeyRetry); errors.Is(err, jwt.ErrTokenUnverifiable) && time.Now().Before(deadline); {
+		select {
+		case <-ctx.Done():
+			return nil, ErrUnauthenticated
+		case <-time.After(unknownKeyEvery):
+		}
+		c = Claims{}
+		_, err = jwt.ParseWithClaims(token, &c, s.keys.Keyfunc, opts...)
+	}
 	if err == nil && len(s.issuers) > 0 && !slices.Contains(s.issuers, c.Issuer) {
 		return nil, ErrUnauthenticated
 	}
