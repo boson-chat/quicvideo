@@ -140,6 +140,9 @@ func StartScreen(o ScreenOptions, push func(CapturedFrame)) (Source, error) {
 	if o.MaxWidth <= 0 {
 		o.MaxWidth = 1920
 	}
+	if o.DisplayID == PortalPicker {
+		o.DisplayID = 0 // no system picker here: the main display
+	}
 	w, h := 0, 0
 	if o.WindowID == 0 {
 		ds, _, err := ListScreens()

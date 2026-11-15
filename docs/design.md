@@ -140,20 +140,23 @@ Reading it:
 
 ## Load test
 
-Run with `netem/loadtest.sh` (`examples/loadtest`): every participant publishes a synthetic 3-layer camera (150k / 500k / 1.2M) and subscribes to everyone else in its call at one layer. The initial estimate is set high, so this measures forwarding cost, not the controller. Server CPU is from `docker stats` (100% = one core).
+Run with `examples/loadtest`: every participant publishes a synthetic 3-layer camera (150k / 500k / 1.2M) and subscribes to everyone else in its call at one layer. The initial estimate is set high, so this measures forwarding cost, not the controller. With `LayerActive`, publishers only send the layer people watch.
 
-**Linux** (phase 2; the target figure). The server and the load generator ran in separate Linux containers **pinned to separate CPUs** (server on 4 cores, generator on 6), in Docker Desktop's Linux VM on the M1 Max. It's virtualized and on one machine, so it's still not a VPS NIC, but the Linux network stack and quic-go's Linux paths (GSO, recvmmsg) are real, and the generator no longer competes for the server's cores. The CachyOS box was unreachable for this run.
+**Linux, real hardware** (the figure to size with): AMD Ryzen 9 5900XT (CachyOS, bare metal). The server was pinned to 4 cores and the load generator to 12 other cores (`taskset`), over loopback. CPU is the server's steady-state user+system time from `/proc` over 12 s (1.0 = one core).
 
 | Scenario | Forwarded streams | Publish | Egress | Server CPU | Latency p50 / p99 | Groups cut |
 |---|---|---|---|---|---|---|
-| 4 calls × 6 people, mid layer (500k) | 120 | 12 Mbps | 60 Mbps | ~0.32 core | 0.3 / 1.5 ms | 0 |
-| 4 calls × 6 people, top layer (1.2M) | 120 | 29 Mbps | 144 Mbps | ~0.38 core | 0.3 / 1.3 ms | 0 |
-| 8 calls × 8 people, top layer (1.2M) | 448 | 77 Mbps | 537 Mbps | ~0.85 core (1.25 while ramping up) | 0.4 / 3.6 ms | 0 |
+| 4 calls × 6 people, mid layer (500k) | 120 | 12 Mbps | 60 Mbps | 0.17 core | 0.2 / 0.4 ms | 0 |
+| 4 calls × 6 people, top layer (1.2M) | 120 | 29 Mbps | 144 Mbps | 0.19 core | 0.2 / 0.5 ms | 0 |
+| 8 calls × 8 people, top layer (1.2M) | 448 | 77 Mbps | 537 Mbps | 0.54 core | 0.2 / 0.8 ms | 0 |
 
-That's about **0.16 core per 100 Mbps of egress at 500 Mbps**, and 0.25–0.5 at small loads, where fixed per-connection work dominates.
+That's about **0.1 core per 100 Mbps of egress at load**. At small loads the fixed per-connection work dominates.
 
-- **Publishing is lower than in phase 1:** with `LayerActive`, publishers only send the layer people watch (phase 1 sent all three: 44 vs 12 Mbps in the first row).
-- **Phase 1 on macOS loopback**, with the generator unpinned on the same CPUs, measured 0.5–0.7 core per 100 Mbps. Most of that difference was the generator competing for the cores, plus macOS's UDP path.
+Earlier figures, for reference:
+- **Linux containers in Docker's VM on the M1 Max** (pinned, `netem/loadtest.sh`): 0.16 core per 100 Mbps at 537 Mbps.
+- **macOS loopback** with the generator unpinned (phase 1): 0.5–0.7 core per 100 Mbps.
+
+A real NIC adds interrupt and checksum work that loopback doesn't have, so budget some headroom.
 
 ## Hardware for the friends scale
 
@@ -170,7 +173,7 @@ A busy evening with **3–5 calls of 4–8 people** comes to about **50–150 Mb
 
 | | Recommendation |
 |---|---|
-| CPU | **2 dedicated vCPU** is plenty. At the Linux figure above, 150 Mbps of egress is under half a core; the second core is headroom. Dedicated rather than shared, because noisy neighbours cause frame jitter. |
+| CPU | **2 dedicated vCPU** is plenty. At the real-hardware figure above, 150 Mbps of egress is about a fifth of a core; the second core is headroom. Dedicated rather than shared, because noisy neighbours cause frame jitter. |
 | RAM | **2 GB** is plenty. The relay holds ≤ 2 MB of cache per layer and ≤ 2 MB of queue per subscription, so tens of MB at this scale. |
 | Network | A **≥ 300 Mbps** port, and public UDP 7710 open. |
 | Traffic | 100 Mbps for 3 h/day is about 4 TB/month; 50 Mbps for 2 h/day is about 1.4 TB/month. Pick a plan with **2–5 TB included**, or unmetered. |
@@ -213,11 +216,45 @@ macOS code (cgo, `_darwin` files; `media_other.go` stubs return `ErrUnsupported`
 
 Verified on an M1 Max: the VideoToolbox round trip test (hardware encoder, 1280×720 → 640×360 scaling, forced keyframes with SPS/PPS, colours intact, decoder following a 640×360 → 320×180 switch). Manual runs published camera and screen from one client through a local quicvideod to a second: screen pinned at its top layer, camera in the strip at 360p, self-preview in the corner.
 
+## Client media on Linux
+
+The same `client/media` API, in cgo against the system libraries (no bundled codecs).
+
+**Encode** (`AVEncoder`; `BackendAuto` tries them in this order):
+1. **NVENC** via libavcodec `h264_nvenc`: `p2` preset, `ull` tune, CBR, zero latency, no B-frames, forced IDR.
+2. **VA-API** via `h264_vaapi` (Intel/AMD): frames are uploaded to VA surfaces.
+3. **openh264**, called directly: the software fallback. It's BSD-licensed, and this distro's FFmpeg doesn't wrap it.
+4. **libx264**: only when explicitly chosen, or with `QUICVIDEO_ALLOW_GPL=1`. It's GPL, and quicvideo shouldn't become GPL by accident.
+
+Encoders scale and convert with libswscale. Output is normalized to quicvideo's access units (AUD first, SPS/PPS on IDR frames).
+
+**Decode:** libavcodec's H.264 decoder (slice threads only, so no extra frame of delay). Pictures are `AVFrame`s, converted to RGBA for the UI with libswscale.
+
+**Camera:** V4L2 through libavdevice, MJPEG preferred (most webcams only reach HD at 30 fps that way). `/dev/video*` nodes are listed with `VIDIOC_QUERYCAP`, skipping metadata nodes. Ranking: built-in, then USB, then v4l2loopback (virtual).
+
+**Screen:**
+- **Wayland (and X11 desktops with a portal):** the xdg-desktop-portal ScreenCast flow over D-Bus (godbus): `CreateSession`, then `SelectSources` (monitor or window, embedded cursor, `persist_mode=2`), then `Start`, then `OpenPipeWireRemote`. Then a PipeWire stream asking for mappable buffers (MemPtr/MemFd) in BGRx/BGRA/RGBx/RGBA/xRGB/xBGR.
+  - The portal's restore token is saved per user and per source kind (`~/.config/quicvideo/screencast-restore-token-{monitor,window}`, or `$QUICVIDEO_CONFIG_DIR`). It's offered in the next `SelectSources`, so later shares start without a dialog; a fresh token comes back each time.
+  - Some portals (Hyprland) show their picker during `SelectSources`, so that step waits up to 2 minutes for the person too.
+- **Plain X11 sessions:** x11grab.
+
+**Verified on CachyOS** (Ryzen 9 5900XT, RTX 4070 Ti SUPER with driver 620.70, Hyprland on Wayland, xdg-desktop-portal-hyprland 1.5):
+- **Encode/decode:** NVENC and openh264 round-trip tests pass (scaling, forced keyframes with SPS/PPS, colours). VA-API reports encode as unsupported on NVIDIA, as expected (that driver only decodes), so it's untested on real hardware.
+- **Screen:** portal + PipeWire capture of the 3840×2160 desktop, encoded by NVENC.
+- **Cross-platform call:** a Linux viewer published an NVENC-encoded camera to a Mac viewer, and decoded the Mac's VideoToolbox screen share and camera.
+- **Untested:** there's no webcam on that machine, so V4L2 is untested on real hardware (it would need v4l2loopback, a kernel module).
+
 ## Phases
 
 1. **Done: relay working end to end.** Wire format, relay, Go SDK, pub/sub bots (synthetic and real H.264), load test, metrics.
 2. **Done: quality under bad networks.** Per-subscriber bandwidth estimate and layer choice (max layer from the client), `SubscriptionState`, `ReceiverReport`, `LayerActive` with publisher-side layer pausing, a non-blocking publisher send queue with stats, token expiry + `Refresh`, the Docker netem harness, and a CPU-pinned Linux load test.
-3. **Done (macOS): real capture, encode and decode.** `client/media` + `examples/viewer`, see above. Windows (Windows Graphics Capture + Media Foundation/NVENC/AMF/QSV) and Linux (PipeWire portal + VAAPI/NVENC) capture and codecs are next; the `Publisher`, layer presets and tile mapping are platform-neutral already.
+3. **Real capture, encode and decode.**
+   - **macOS: done.** ScreenCaptureKit, AVFoundation and VideoToolbox.
+   - **Linux: done.** Portal + PipeWire, V4L2, NVENC / VA-API / openh264.
+   - **Windows:** next.
+
+   The viewer (Gio) is shared.
 4. **Browsers.** WebTransport + WebCodecs on the same stream-per-group design.
-5. **Direct P2P for 2–4 person calls, falling back to the relay.** For a small friends call, a direct QUIC connection between participants (with NAT hole punching coordinated over the relay's control stream) saves the server's bandwidth and a network hop. Bigger calls, failed hole punching or strict NATs use the relay. The media format stays the same, so the client only switches where it sends.
-6. **Merge with voice.** quicvoiced issues short-lived video tickets (Ed25519/JWKS) for the voice room you're in, so the video server never has to call auth or Ergo. One call UI, a `video` profile in boson-chat/stack, and the option to run it on a separate server.
+5. **Merge with voice.** quicvoiced issues short-lived video tickets (Ed25519/JWKS) for the voice room you're in, so the video server never has to call auth or Ergo. One call UI, a `video` profile in boson-chat/stack, and the option to run it on a separate server.
+
+**Dropped: direct P2P for 2–4 person calls.** It was planned as a later phase. Direct QUIC between participants, with hole punching coordinated over the relay, would have saved relay bandwidth for the smallest calls, at the cost of a second media path to build, test and debug (NAT traversal, fallback, per-peer rate control). At the friends-call scale the relay's cost is small (see the load test), so it was taken out of the plan.

@@ -138,6 +138,14 @@ func NewVTEncoder(cfg EncoderConfig, out func(EncodedFrame)) (Encoder, error) {
 	return e, nil
 }
 
+// Backend names the encoder in use.
+func (e *VTEncoder) Backend() string {
+	if e.hardware {
+		return "VideoToolbox (hardware)"
+	}
+	return "VideoToolbox (software)"
+}
+
 // Hardware reports whether a hardware encoder is in use.
 func (e *VTEncoder) Hardware() bool { return e.hardware }
 
@@ -328,34 +336,9 @@ func NewBGRA(w, h int) *PixelBuffer {
 	return wrapPB(ref)
 }
 
-var bars = [8][3]byte{{235, 235, 235}, {235, 235, 16}, {16, 235, 235}, {16, 235, 16}, {235, 16, 235}, {235, 16, 16}, {16, 16, 235}, {16, 16, 16}}
-
 func (p *PixelBuffer) drawPattern(n int) {
 	pix, stride, unlock := p.lock(false)
 	defer unlock()
 	w, h := p.Size()
-	box := (n * 8) % max(w-h/4, 1)
-	for y := range h {
-		row := pix[y*stride:]
-		for x := range w {
-			c := bars[x*8/w]
-			if y > h*3/4 { // bottom quarter: grey with a moving box
-				c = [3]byte{40, 40, 40}
-				if x >= box && x < box+h/4 {
-					c = [3]byte{255, 160, 0}
-				}
-			}
-			// Frame counter as 16 bits across the top strip.
-			if y < h/20 {
-				bit := x * 16 / w
-				if n>>(15-bit)&1 == 1 {
-					c = [3]byte{255, 255, 255}
-				} else {
-					c = [3]byte{0, 0, 0}
-				}
-			}
-			o := x * 4
-			row[o], row[o+1], row[o+2], row[o+3] = c[2], c[1], c[0], 255
-		}
-	}
+	drawPatternBGRA(pix, stride, w, h, n)
 }

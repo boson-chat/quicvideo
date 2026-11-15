@@ -50,9 +50,15 @@ bin/viewer -insecure -token bob                       # or use the buttons
 - **Default camera:** built-in (FaceTime) first, then a physical USB webcam, then an iPhone, and a virtual camera (OBS, Immersed...) only if there's nothing else. Override with `-camera-id`.
 - **Flags:** `-pattern` uses a moving test pattern as the camera (no permissions needed). `-snapshot file.png` writes the tiles, and a real window screenshot when allowed.
 
-The UI is [Gio](https://gioui.org), so the same viewer will run on Windows and Linux once their capture/codec backends exist. Today capture and codecs are macOS-only.
+The UI is [Gio](https://gioui.org): the same viewer runs on macOS and Linux today, and on Windows once its media backend lands.
 
 **macOS requirements:** macOS 13+ (ScreenCaptureKit, low-latency VideoToolbox), and a hardware H.264 encoder (a software fallback is used otherwise).
+
+**Linux requirements:**
+- **Libraries:** FFmpeg (`libavcodec`, `libavformat`, `libavdevice`, `libavutil`, `libswscale`), `openh264` and PipeWire (`libpipewire-0.3`). On Debian/Ubuntu, install the `-dev` packages: `libavcodec-dev libavformat-dev libavdevice-dev libavutil-dev libswscale-dev libopenh264-dev libpipewire-0.3-dev`. The Gio UI also needs X11/Wayland/EGL headers (see `.github/workflows/ci.yml`).
+- **Encoder:** NVENC on NVIDIA, VA-API on Intel/AMD, openh264 otherwise. libx264 is GPL and only used with `QUICVIDEO_ALLOW_GPL=1`.
+- **Screen sharing:** goes through xdg-desktop-portal, which shows the system picker. The choice is remembered with a restore token in `~/.config/quicvideo/`, so later shares start without asking.
+- **Cameras:** V4L2. Your user needs access to `/dev/video*`, usually through the `video` group.
 
 **Permissions (TCC):**
 - **Screen Recording:** System Settings → Privacy & Security → Screen & System Audio Recording. The app asks once; after allowing, it must be **restarted** (macOS applies it at launch). There is no Info.plist key for it.
