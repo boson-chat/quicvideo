@@ -8,6 +8,8 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -66,5 +68,57 @@ func TestJWKSMultipleSourcesAndIssuers(t *testing.T) {
 	stranger, _ := jwksServer(t, "x")
 	if _, err := svc.Verify(context.Background(), sign(t, stranger, "voice-1", "voice", nil)); err == nil {
 		t.Fatal("a key that isn't in either JWKS must be rejected")
+	}
+}
+
+// TestJWKSDownAtStartThenConcurrentTokens: quicvideod starting before
+// quicvoiced (JWKS down), then the first callers' tickets arriving at once.
+// Every one of them must verify, not just the one that triggered the
+// unknown-kid refresh.
+func TestJWKSDownAtStartThenConcurrentTokens(t *testing.T) {
+	pub, priv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var up atomic.Bool
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		if !up.Load() {
+			http.Error(w, "starting", http.StatusServiceUnavailable)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"keys": []map[string]string{{
+			"kty": "OKP", "crv": "Ed25519", "alg": "EdDSA", "use": "sig", "kid": "voice-1",
+			"x": base64.RawURLEncoding.EncodeToString(pub),
+		}}})
+	}))
+	defer srv.Close()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	svc, err := NewJWKSAuthService(ctx, srv.URL, "voice", "quicvideo")
+	if err != nil {
+		t.Fatal(err)
+	}
+	tok := sign(t, priv, "voice-1", "voice", []string{"general"})
+	// Still down: the first refresh fails too.
+	if _, err := svc.Verify(ctx, tok); err == nil {
+		t.Fatal("verified with the JWKS down")
+	}
+	up.Store(true)
+	var wg sync.WaitGroup
+	errs := make(chan error, 8)
+	for range 8 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_, err := svc.Verify(ctx, tok)
+			errs <- err
+		}()
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatalf("a concurrent first ticket failed: %v", err)
+		}
 	}
 }
