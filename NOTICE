@@ -1,0 +1,20 @@
+quicvideo
+Copyright (C) 2026 bludot / the boson authors
+Licensed under the GNU Affero General Public License v3.0 only (see LICENSE).
+
+This repository contains or uses third-party code under its own licenses:
+
+- third_party/webtransport-go: a patched copy of
+  github.com/quic-go/webtransport-go, Copyright 2022 Marten Seemann,
+  MIT License (third_party/webtransport-go/LICENSE). The patches are
+  described in third_party/webtransport-go/QUICVIDEO_PATCHES.md.
+
+- On Linux, client/media links at build time against system libraries
+  that are not part of this repository: FFmpeg (libavcodec, libavformat,
+  libavdevice, libavutil, libswscale; LGPL-2.1-or-later, or
+  GPL-2.0-or-later when built with --enable-gpl), Cisco openh264
+  (BSD-2-Clause) and PipeWire (MIT). Do not link against an FFmpeg built
+  with --enable-nonfree: that build cannot be redistributed.
+
+Go module dependencies keep their own licenses (MIT, BSD, Apache-2.0,
+Unlicense and similar); see go.mod.

@@ -139,3 +139,11 @@ Publishers get `LayerActive` messages and should only encode the layers someone 
 ## Release
 
 Every push to `main` runs semantic-release (`feat` → minor, `fix`/`perf`/`refactor`/`build` → patch). It builds `harbor.floret.dev/boson/quicvideo:<version>` for amd64 and arm64. This needs `HARBOR_USERNAME` / `HARBOR_PASSWORD`: the org secrets only reach this repo once it's public (free plan); otherwise add them per repo.
+
+## License
+
+Copyright (C) 2026 bludot / the boson authors
+
+Licensed under the [GNU Affero General Public License v3.0](LICENSE) only (`AGPL-3.0-only`). Third-party code keeps its own license; see [NOTICE](NOTICE).
+
+In plain English: if you run a modified version of this software as a network service, you must offer its source code to the people who use that service.
