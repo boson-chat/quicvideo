@@ -59,6 +59,7 @@ type trackResult struct {
 	Cuts        int           `json:"groups_cut"`
 	States      []stateChange `json:"states"`
 	Unrecovered bool          `json:"unrecovered,omitempty"`
+	noFreeze    bool
 }
 
 func main() {
@@ -71,6 +72,7 @@ func main() {
 	eventAt := flag.Duration("event-at", 0, "time of a network change (measure from here, report recovery)")
 	scenario := flag.String("scenario", "baseline", "name for the results")
 	jsonOut := flag.String("json", "", "write results JSON here")
+	contentGaps := flag.Bool("content-gaps", false, "screen tracks only send when the screen changes (real traces): don't count their gaps as freezes")
 	flag.Parse()
 
 	start := time.Now()
@@ -154,6 +156,9 @@ loop:
 	for _, id := range ids {
 		t := tracks[id]
 		r := analyze(*scenario, t, samples[id], from, end, *eventAt)
+		if *contentGaps && t.GetKind() == controlpb.TrackKind_SCREEN {
+			r.FreezeS, r.RecoveryS, r.Unrecovered, r.noFreeze = 0, nil, false, true
+		}
 		r.Kbps = float64(bytes[id]) * 8 / (end - from).Seconds() / 1000
 		r.Cuts = cuts[id]
 		r.States = states[id]
@@ -164,8 +169,12 @@ loop:
 		} else if r.Unrecovered {
 			rec = "not recovered"
 		}
-		fmt.Printf("| %s | %s | %s | %.1f | %.0f | %.0f | %.0f | %.1f s | %s |\n",
-			r.Scenario, r.Track, r.Layer, r.FPS, r.Kbps, r.P50ms, r.P99ms, r.FreezeS, rec)
+		freeze := fmt.Sprintf("%.1f s", r.FreezeS)
+		if r.noFreeze {
+			freeze = "n/a"
+		}
+		fmt.Printf("| %s | %s | %s | %.1f | %.0f | %.0f | %.0f | %s | %s |\n",
+			r.Scenario, r.Track, r.Layer, r.FPS, r.Kbps, r.P50ms, r.P99ms, freeze, rec)
 	}
 	if *jsonOut != "" {
 		b, _ := json.MarshalIndent(results, "", "  ")

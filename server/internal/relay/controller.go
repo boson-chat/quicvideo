@@ -189,6 +189,15 @@ func required(subs []allocSub, choice []int) float64 {
 	return sum
 }
 
+// lowestNeed is what every subscription's lowest layer needs together.
+func lowestNeed(subs []allocSub) float64 {
+	var sum float64
+	for _, a := range subs {
+		sum += a.bitrates[0]
+	}
+	return sum
+}
+
 // nextStepCost is the extra bits/s for the cheapest single upgrade in
 // priority order (0 = everything is at its max).
 func nextStepCost(subs []allocSub, choice []int) float64 {
@@ -383,6 +392,13 @@ func (m *Member) controlTick(now time.Time) {
 			} else {
 				e = min(e, max(c.rate*0.9, need*0.5))
 			}
+		}
+		// Pausing someone's video is a far bigger hit than a slight
+		// overshoot: if the link delivered at least what everyone's lowest
+		// layer needs, don't go below that. Pausing takes evidence that even
+		// the lowest layers don't fit.
+		if lowest := lowestNeed(subs); c.rate >= lowest {
+			e = max(e, lowest)
 		}
 		c.estimate = max(e, o.MinBitrate)
 		c.downAt, c.stableSince, c.everCongested = now, now, true

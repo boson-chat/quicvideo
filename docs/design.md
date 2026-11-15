@@ -64,7 +64,7 @@ On congestion the estimate drops to 85% of what the current layers need. If the 
 
 ## Bad networks (`make netem`)
 
-`netem/run.sh` runs the server, a camera publisher (150k/500k/1.2M, 30 fps, 2 s GOP) and a screen-share publisher (720p 5 fps 300k / 1080p 15 fps 2M, 4 s GOP) in Docker on this Mac. Shaping uses `tc` inside the containers (`NET_ADMIN`).
+`netem/run.sh` (`make netem`, `MODE=trace make netem`) runs the server, a camera publisher (150k/500k/1.2M, 30 fps, 2 s GOP) and a screen-share publisher (720p 5 fps 300k / 1080p 15 fps 2M, 4 s GOP) in Docker on this Mac. Shaping uses `tc` inside the containers (`NET_ADMIN`).
 
 - **Viewer downlink:** shaped on the server's interface toward the viewer, so the one-way delay scenario makes an RTT of about 100 ms.
 - **`uplink1`:** shapes the camera publisher's uplink instead.
@@ -75,35 +75,68 @@ On congestion the estimate drops to 85% of what the current layers need. If the 
 - **Freeze:** time past a gap of max(250 ms, 3 frame intervals).
 - **Recovery:** the first 2 s with ≥ 70% of the layer's fps and p90 latency < 400 ms.
 
-Ideal with no limits: screen 1080p at 15 fps (2.0 Mbps) plus camera 720p at 30 fps (1.2 Mbps), about 3.2 Mbps. Results after tuning:
+It runs in two modes:
+
+- **`MODE=synthetic`** (default): the bots send synthetic frames at the full layer bitrates continuously. This is the worst case: a camera always moving, a screen always changing.
+- **`MODE=trace`**: the bots replay **real VideoToolbox output**. `examples/vtrace` captured a real camera (an iPhone via Continuity, 1080p) and a real working desktop on an M1 Max for 60 s each, and ran every simulcast layer through the same encoder setup as the Publisher. It recorded each frame's size, timing and keyframe flag, plus the size of the same picture encoded as a forced keyframe, so a replayed keyframe request gets a keyframe of the right size. Only sizes and timings are kept (`netem/traces/*.json`), no pictures. VideoToolbox can't run inside the Linux containers, so this replay is the faithful way to put real encoder output on the shaped link.
+
+The recordings show real traffic is much gentler than synthetic:
+- **Camera:** about 23 fps, keyframes every 2 s, and the encoder reached only ~60% of the layer targets on real content (691 vs 1160 kbps at 720p).
+- **Desktop:** mostly static, about 1 frame/s with real gaps, and occasional big keyframes.
+
+For the screen in trace mode, gaps are content, not freezes, so its freeze and recovery read "n/a".
+
+**Synthetic** (ideal with no limits: screen 1080p at 15 fps, 2.0 Mbps, plus camera 720p at 30 fps, 1.2 Mbps):
 
 | Scenario | Track | Received layer | fps | kbps | p50 ms | p99 ms | Freeze | Recovery |
 |---|---|---|---|---|---|---|---|---|
-| baseline (no limits) | screen | L1 1080p | 15.0 | 1999 | 1 | 6 | 0.0 s | – |
-| baseline (no limits) | camera | L2 720p | 30.0 | 1199 | 1 | 4 | 0.0 s | – |
-| 2% loss | screen | L1 1080p | 15.0 | 1999 | 1 | 25 | 0.0 s | – |
-| 2% loss | camera | L2 720p | 30.0 | 1199 | 1 | 14 | 0.0 s | – |
-| 5% loss | screen | L1 1080p | 15.0 | 2000 | 1 | 32 | 0.0 s | – |
-| 5% loss | camera | L2 720p | 30.0 | 1200 | 1 | 31 | 0.0 s | – |
-| 100 ms ±20 ms delay | screen | L1 1080p | 15.0 | 2000 | 122 | 170 | 0.0 s | – |
-| 100 ms ±20 ms delay | camera | L2 720p | 30.0 | 1198 | 114 | 154 | 0.0 s | – |
-| 3 Mbps cap | screen | L1 1080p (L0–L1) | 12.9 | 1657 | 23 | 332 | 1.4 s | – |
-| 3 Mbps cap | camera | L1 360p (L1–L2) | 28.6 | 690 | 2 | 651 | 1.7 s | – |
-| 1 Mbps cap | screen | L0 720p | 4.8 | 292 | 1 | 754 | 0.7 s | – |
-| 1 Mbps cap | camera | L0 180p (L0–L2) | 19.4 | 298 | 1 | 1254 | 2.8 s | – |
-| 6 → 1 Mbps at 15 s | screen | L0 720p (L0–L1) | 4.8 | 303 | 2 | 535 | 1.5 s | 1.9 s |
-| 6 → 1 Mbps at 15 s | camera | L1 360p (L0–L2) | 25.1 | 408 | 2 | 968 | 4.4 s | 2.6 s |
-| publisher uplink 1 Mbps (camera) | screen | L1 1080p | 14.5 | 1945 | 1 | 8 | 0.6 s | – |
-| publisher uplink 1 Mbps (camera) | camera | L0 180p (L0–L2) | 15.0 | 187 | 1 | 382 | 1.2 s | – |
+| baseline | camera | L2 720p | 30.0 | 1200 | 1 | 5 | 0.0 s | – |
+| baseline | screen | L1 1080p | 15.0 | 2000 | 1 | 6 | 0.0 s | – |
+| 2% loss | camera | L2 720p | 30.0 | 1201 | 1 | 28 | 0.0 s | – |
+| 2% loss | screen | L1 1080p | 15.0 | 2000 | 1 | 9 | 0.0 s | – |
+| 5% loss | camera | L2 720p | 29.9 | 1198 | 1 | 31 | 0.0 s | – |
+| 5% loss | screen | L1 1080p | 14.9 | 1993 | 1 | 34 | 0.0 s | – |
+| 100 ms ±20 ms delay | camera | L2 720p | 30.0 | 1198 | 113 | 156 | 0.0 s | – |
+| 100 ms ±20 ms delay | screen | L1 1080p (L0–L1) | 13.1 | 1709 | 122 | 167 | 0.2 s | – |
+| 3 Mbps cap | camera | L1 360p (L1–L2) | 28.8 | 720 | 3 | 532 | 1.3 s | – |
+| 3 Mbps cap | screen | L1 1080p (L0–L1) | 12.9 | 1657 | 28 | 302 | 1.3 s | – |
+| 1 Mbps cap | camera | L1 360p | 30.0 | 500 | 2 | 462 | 1.9 s | – |
+| 1 Mbps cap | screen | L0 720p | 5.0 | 300 | 26 | 415 | 2.0 s | – |
+| 6 → 1 Mbps at 15 s | camera | L1 360p (L0–L2) | 25.4 | 416 | 2 | 864 | 4.0 s | 2.4 s |
+| 6 → 1 Mbps at 15 s | screen | L0 720p (L0–L1) | 5.0 | 320 | 2 | 796 | 1.2 s | 1.8 s |
+| publisher uplink 1 Mbps (camera) | camera | L0 180p (L0–L2) | 18.0 | 246 | 1 | 439 | 0.0 s | – |
+| publisher uplink 1 Mbps (camera) | screen | L1 1080p | 15.0 | 2000 | 1 | 5 | 0.0 s | – |
 
-(One 30 s run each; run-to-run variation is real. Earlier runs of `cap1` settled the camera on 360p rather than 180p, for example. Rerun `make netem` to compare.)
+**Real encoder output** (`MODE=trace`):
+
+| Scenario | Track | Received layer | fps | kbps | p50 ms | p99 ms | Freeze | Recovery |
+|---|---|---|---|---|---|---|---|---|
+| baseline | camera | L2 720p | 24.1 | 975 | 1 | 6 | 0.0 s | – |
+| baseline | screen | L1 1080p | 1.2 | 346 | 1 | 2 | n/a | – |
+| 2% loss | camera | L2 720p | 22.5 | 386 | 1 | 36 | 0.3 s | – |
+| 2% loss | screen | L1 1080p | 1.1 | 341 | 2 | 98 | n/a | – |
+| 5% loss | camera | L2 720p | 23.9 | 974 | 1 | 33 | 0.0 s | – |
+| 5% loss | screen | L1 1080p | 1.2 | 346 | 2 | 43 | n/a | – |
+| 100 ms ±20 ms delay | camera | L2 720p | 22.3 | 376 | 113 | 152 | 0.3 s | – |
+| 100 ms ±20 ms delay | screen | L1 1080p | 1.0 | 329 | 142 | 188 | n/a | – |
+| 3 Mbps cap | camera | L2 720p | 23.8 | 959 | 1 | 267 | 1.1 s | – |
+| 3 Mbps cap | screen | L1 1080p | 1.1 | 334 | 131 | 279 | n/a | – |
+| 1 Mbps cap | camera | L2 720p | 22.0 | 384 | 1 | 559 | 1.2 s | – |
+| 1 Mbps cap | screen | L0 720p (L0–L1) | 1.0 | 117 | 67 | 1077 | n/a | – |
+| 6 → 1 Mbps at 15 s | camera | L1 360p (L1–L2) | 22.3 | 187 | 1 | 808 | 1.3 s | 2.7 s |
+| 6 → 1 Mbps at 15 s | screen | L0 720p (L0–L1) | 0.7 | 92 | 53 | 1454 | n/a | – |
+| publisher uplink 1 Mbps (camera) | camera | L1 360p (L1–L2) | 20.8 | 319 | 1 | 423 | 0.2 s | – |
+| publisher uplink 1 Mbps (camera) | screen | L1 1080p | 1.0 | 293 | 1 | 4 | n/a | – |
+
+(One 30–45 s run per row on this Mac; the kbps column wobbles a lot in trace mode, because each run starts somewhere different in the 60 s recording. Rerun with `MODE=… make netem`.)
 
 Reading it:
-- **Loss (2%, 5%) and delay (100 ± 20 ms)** cost only latency: both tracks stay at their top layers. QUIC repairs the loss inside each group, and the controller doesn't treat random loss as congestion.
-- **3 Mbps:** keeps the screen at 1080p and puts the camera on 360p. That's the priority order: screen share first.
-- **1 Mbps:** settles on screen 720p at 5 fps plus a small camera. Most freezes and the p99 tail come from the one or two probes allowed after the capacity memory expires.
-- **6 → 1 Mbps:** both tracks are back to steady video about 2–2.6 s after the drop. The camera's freeze includes the drop itself.
-- **Uplink limit:** the camera publisher can't push its 720p layer through 1 Mbps. The relay notices that layer arriving late (ingress health, see bandwidth control above), stops offering it, and with nobody watching it the publisher stops sending it. The viewer gets a clean low layer instead of a frozen 720p. Before ingress health this scenario gave p50 484 ms and 9 s of freezes on 720p.
+- **Loss and delay** cost only latency in both modes: the top layers hold. QUIC repairs loss inside each group, and random loss isn't treated as congestion.
+- **Caps:** with real content the camera keeps **720p** even at 3 Mbps, and at 1 Mbps too (it averages ~400 kbps there). Synthetic content needs the full 1.2 Mbps, so it drops to 360p, while the screen holds 1080p by priority.
+- **6 → 1 Mbps:** recovers in about 2.5 s in both modes.
+  - The first synthetic run of this table **didn't recover**: the camera stayed paused for 28 s. At the drop, loss collapsed the delivered rate for a second (465 kbps). 90% of it was just below what screen-low + camera-low need (450 kbps), so the camera was paused, and probes to resume it kept failing on screen-keyframe bursts.
+  - Fix: pausing someone's video is a much bigger hit than a slight overshoot, so the estimate no longer goes below the sum of the lowest layers while the link still delivers that much. The rows above are after the fix; two more runs recovered in 2.4 s and 2.7 s.
+- **Uplink limit:** ingress health takes the late top layer away, and the camera settles on a lower one.
 
 ## Load test
 

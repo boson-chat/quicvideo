@@ -5,10 +5,20 @@ set -euo pipefail
 cd "$(dirname "$0")"
 DC="docker compose -f compose.yaml"
 DUR=${DUR:-30s}
+# MODE=synthetic (default): worst-case synthetic load at the full layer
+# bitrates. MODE=trace: replay real VideoToolbox output recorded with
+# examples/vtrace (netem/traces/*.json): real frame sizes, timing and
+# keyframes from a real camera and a real desktop.
+MODE=${MODE:-synthetic}
+EXTRA=()
+if [ "$MODE" = trace ]; then
+  export CAM_SOURCE="-trace /traces/camera.json" SCREEN_SOURCE="-trace /traces/screen.json"
+  EXTRA=(-content-gaps)
+fi
 WARMUP=${WARMUP:-10s}
 mkdir -p results
 
-$DC up -d --build >/dev/null
+$DC up -d --build --force-recreate >/dev/null
 sleep 3
 
 srv_if=$($DC exec -T server sh -c "ip -o -4 addr | awk '/10\.77\.2\./{print \$2}'")
@@ -22,7 +32,7 @@ uplink()   { $DC exec -T pub-cam tc qdisc replace dev "$pub_if" root "$@"; }
 bench() { # name [extra netbench flags]
   local name=$1; shift
   $DC exec -T viewer netbench -addr 10.77.2.10:7710 -insecure -token "viewer-$name" -room call \
-    -duration "$DUR" -warmup "$WARMUP" -scenario "$name" -json "/results/$name.json" "$@"
+    -duration "$DUR" -warmup "$WARMUP" -scenario "$name" -json "/results/$MODE-$name.json" ${EXTRA[@]+"${EXTRA[@]}"} "$@"
 }
 
 run() {
@@ -54,7 +64,7 @@ scenarios=("$@")
   echo "| Scenario | Track | Received layer | fps | kbps | p50 ms | p99 ms | Freeze | Recovery |"
   echo "|---|---|---|---|---|---|---|---|---|"
   for s in "${scenarios[@]}"; do run "$s"; done
-} | tee results/results.md
+} | tee "results/results-$MODE.md"
 unshape
 $DC logs --no-color server > results/server.log 2>&1 || true
 [ -n "${KEEP:-}" ] || $DC down >/dev/null 2>&1 || true
