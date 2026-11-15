@@ -98,7 +98,7 @@ func newRig(t *testing.T) *rig {
 		r.encs[byID[cfg.Height]] = e
 		r.mu.Unlock()
 		return e, nil
-	}, PublisherOptions{})
+	}, PublisherOptions{Now: func() time.Time { return time.UnixMicro(int64(r.us)) }})
 	return r
 }
 
@@ -136,6 +136,19 @@ func TestPublisherEncodesOnlyActiveLayers(t *testing.T) {
 	r.p.SetActive(1, false)
 	if !r.enc(1).closed || len(r.p.ActiveLayers()) != 0 {
 		t.Fatal("deactivated encoder should be closed")
+	}
+}
+
+// A keyframe re-encoded for a static screen is stamped with the current
+// time, not the (old) time of the last capture.
+func TestPublisherKickUsesCurrentTime(t *testing.T) {
+	r := newRig(t)
+	r.push(1)         // captured at t0
+	r.us += 5_000_000 // 5 s of static screen: no captures
+	r.p.SetActive(2, true)
+	e := r.enc(2)
+	if len(e.calls) != 1 || e.calls[0].us < r.us {
+		t.Fatalf("kicked keyframe stamped %d, want ≥ now %d", e.calls[0].us, r.us)
 	}
 }
 

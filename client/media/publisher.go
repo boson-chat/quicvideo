@@ -203,9 +203,11 @@ func (p *Publisher) kick(layer uint32) {
 	}
 	pic.Retain()
 	le.force = false
-	// It's the last capture re-sent: keep its time (+1 µs so timestamps stay
-	// strictly increasing for the encoder) and the fps cap's position.
-	us := p.lastUS + 1
+	// It's a new frame of what's on screen now (a static screen sends no
+	// captures), so it's stamped now: an old capture time would make the
+	// layer look seconds late to the relay. Strictly increasing for the
+	// encoder.
+	us := max(uint64(p.opts.Now().UnixMicro()), p.lastUS+1)
 	p.lastUS = us
 	le.lastUS = us
 	p.mu.Unlock()

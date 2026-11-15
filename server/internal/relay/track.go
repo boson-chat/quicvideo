@@ -373,7 +373,9 @@ func (l *layerState) observeIngress(now time.Time, captureUS uint64) {
 		base = t.minPrev
 	}
 	t.bucketMu.Unlock()
-	excess := max(rel-base, 0)
+	// Cap one frame's say: a single odd frame (a re-sent picture, a clock
+	// step) mustn't bench a layer; only sustained lateness does.
+	excess := min(max(rel-base, 0), 2*IngressLateDown)
 	l.lateEWMA = (l.lateEWMA*9 + excess) / 10
 	if !l.healthyLocked(now) {
 		return
