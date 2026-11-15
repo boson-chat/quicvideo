@@ -381,3 +381,21 @@ func TestUnhealthyIngressLayerIsAvoided(t *testing.T) {
 		t.Fatalf("layer 2 should be back after the penalty: maxIdx %d", subs[0].maxIdx)
 	}
 }
+
+func TestOneLateFrameDoesNotBenchALayer(t *testing.T) {
+	c := newCtrlEnv(t, 1e9)
+	must(t, c.sub.Subscribe(c.track, 2, 0))
+	us := func(d time.Duration) uint64 { return uint64(c.clock().Add(-d).UnixMicro()) }
+	in0 := c.open(0, 1)
+	must(t, in0.Frame(&wire.Frame{Keyframe: true, CaptureUS: us(5 * time.Millisecond), Payload: []byte{1}}))
+	in2 := c.open(2, 1)
+	// One frame 10 s "late" (e.g. a re-sent picture), then on-time ones.
+	must(t, in2.Frame(&wire.Frame{Keyframe: true, CaptureUS: us(10 * time.Second), Payload: []byte{1}}))
+	for range 5 {
+		must(t, in2.Frame(&wire.Frame{CaptureUS: us(5 * time.Millisecond), Payload: []byte{1}}))
+	}
+	c.advance(250 * time.Millisecond)
+	if l, _ := c.target(); l != 2 {
+		t.Fatalf("one late frame benched layer 2: target %d", l)
+	}
+}
