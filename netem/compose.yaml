@@ -31,17 +31,23 @@ services:
   pub-cam:
     <<: *node
     depends_on: [server]
-    command: ["pub", "-addr", "10.77.1.10:7710", "-insecure", "-token", "cam", "-room", "call",
-              "-kind", "camera", "-gop", "2s",
-              "-layers", "320x180@15:150k,640x360@30:500k,1280x720@30:1200k"]
+    # CAM_SOURCE / SCREEN_SOURCE: synthetic load (default) or a real
+    # encoder trace (MODE=trace in run.sh).
+    command: ["sh", "-c", "exec pub -addr 10.77.1.10:7710 -insecure -token cam -room call -kind camera $${CAM_SOURCE}"]
+    environment:
+      CAM_SOURCE: ${CAM_SOURCE:--gop 2s -layers 320x180@15:150k,640x360@30:500k,1280x720@30:1200k}
+    volumes:
+      - ./traces:/traces:ro
     networks: [pubnet]
 
   pub-screen:
     <<: *node
     depends_on: [server]
-    command: ["pub", "-addr", "10.77.1.10:7710", "-insecure", "-token", "screen", "-room", "call",
-              "-kind", "screen", "-gop", "4s",
-              "-layers", "1280x720@5:300k,1920x1080@15:2000k"]
+    command: ["sh", "-c", "exec pub -addr 10.77.1.10:7710 -insecure -token screen -room call -kind screen $${SCREEN_SOURCE}"]
+    environment:
+      SCREEN_SOURCE: ${SCREEN_SOURCE:--gop 4s -layers 1280x720@5:300k,1920x1080@15:2000k}
+    volumes:
+      - ./traces:/traces:ro
     networks: [pubnet]
 
   viewer:

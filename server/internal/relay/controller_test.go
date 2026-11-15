@@ -399,3 +399,33 @@ func TestOneLateFrameDoesNotBenchALayer(t *testing.T) {
 		t.Fatalf("one late frame benched layer 2: target %d", l)
 	}
 }
+
+func TestControllerDoesNotPauseWhenLowestLayersFit(t *testing.T) {
+	c := newCtrlEnv(t, 5_000_000)
+	c.subP.gated = true
+	screen, err := c.pub.Publish(&controlpb.Publish{Kind: controlpb.TrackKind_SCREEN, Codec: "h264",
+		Layers: []*controlpb.Layer{{Id: 0, Bitrate: 300_000}, {Id: 1, Bitrate: 2_000_000}}})
+	must(t, err)
+	must(t, c.sub.Subscribe(screen, 1, 0))
+	must(t, c.sub.Subscribe(c.track, 2, 0))
+	// The link collapses to ~470 kbps delivered: enough for screen-low +
+	// camera-low (450k). 90% of it (423k) would pause the camera.
+	for range 4 {
+		c.sub.bytesOut.Add(470_000 / 8 / 4)
+		c.advance(250 * time.Millisecond)
+	}
+	in := c.open(2, 1)
+	must(t, in.Frame(frame(true, 10, 'k')))
+	w := c.subP.nextWriter(t)
+	must(t, in.Frame(frame(false, 10, 'x')))
+	for range 4 {
+		c.sub.bytesOut.Add(470_000 / 8 / 4)
+		c.advance(250 * time.Millisecond)
+	}
+	if l, paused := c.target(); paused || l != 0 {
+		t.Fatalf("camera: want layer 0 (not paused), got %d paused=%v (est %.0f, %+v)", l, paused, c.sub.ctrl.estimate, c.sub.ctrl.last)
+	}
+	for range 10 {
+		w.gate <- struct{}{}
+	}
+}

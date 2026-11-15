@@ -9,6 +9,7 @@ package main
 import (
 	"context"
 	"crypto/tls"
+	"errors"
 	"flag"
 	"fmt"
 	"log"
@@ -23,6 +24,7 @@ import (
 	"github.com/boson-chat/quicvideo/gen/controlpb"
 	"github.com/boson-chat/quicvideo/internal/h264"
 	"github.com/boson-chat/quicvideo/internal/synth"
+	"github.com/boson-chat/quicvideo/internal/trace"
 )
 
 func main() {
@@ -34,12 +36,23 @@ func main() {
 	layersF := flag.String("layers", "320x180@15:200k,640x360@30:600k,1280x720@30:1500k", "simulcast layers WxH@fps:bitrate, lowest first")
 	gop := flag.Duration("gop", 2*time.Second, "keyframe interval (synthetic mode)")
 	files := flag.String("h264", "", "comma-separated Annex-B files, one per layer (file mode)")
+	traceFile := flag.String("trace", "", "replay a real encoder trace (see examples/vtrace): its layers, frame sizes, timing and keyframes")
 	duration := flag.Duration("duration", 0, "stop after this long (0 = until Ctrl-C)")
 	flag.Parse()
 
 	layers, err := synth.ParseLayers(*layersF)
 	if err != nil {
 		log.Fatal(err)
+	}
+	var tr *trace.Trace
+	if *traceFile != "" {
+		if tr, err = trace.Load(*traceFile); err != nil {
+			log.Fatal(err)
+		}
+		layers = tr.Layers
+		if tr.Source == "screen" {
+			*kind = "screen"
+		}
 	}
 	var aus [][]h264.AccessUnit
 	if *files != "" {
@@ -108,17 +121,27 @@ func main() {
 				continue
 			}
 			mu.Lock()
-			if aus == nil {
+			if aus == nil && tr == nil {
 				sources[l].ForceKeyframe()
 			} else {
-				jump[l] = true
+				jump[l] = true // file: skip to the next IDR; trace: send a forced-keyframe-sized frame
 			}
 			mu.Unlock()
 		}
 	}()
 
 	var wg sync.WaitGroup
+	if tr != nil {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			replay(ctx, track, tr, jump, &mu)
+		}()
+	}
 	for i, l := range layers {
+		if tr != nil {
+			break
+		}
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
@@ -185,4 +208,50 @@ func main() {
 			log.Print(strings.Join(parts, "  "))
 		}
 	}
+}
+
+// replay plays a real encoder's trace: every frame at its recorded time and
+// size, looping. A keyframe request makes the layer's next frame a keyframe
+// of the size the encoder produced for that picture when forced, as a live
+// encoder would. Payloads are filler bytes; nothing decodes them.
+func replay(ctx context.Context, track *client.LocalTrack, tr *trace.Trace, force []bool, mu *sync.Mutex) {
+	perLayer := tr.ByLayer()
+	var wg sync.WaitGroup
+	for i, frames := range perLayer {
+		if len(frames) == 0 {
+			continue
+		}
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			start := time.Now()
+			for loop := int64(0); ; loop++ {
+				for _, f := range frames {
+					at := start.Add(time.Duration(loop*tr.DurationUS+f.OffsetUS) * time.Microsecond)
+					select {
+					case <-ctx.Done():
+						return
+					case <-time.After(time.Until(at)):
+					}
+					if !track.LayerActive(uint32(i)) {
+						continue
+					}
+					mu.Lock()
+					key, size := f.Key, f.Size
+					if force[i] {
+						force[i] = false
+						key, size = true, f.IntraSize
+					}
+					mu.Unlock()
+					err := track.WriteFrame(uint32(i), key, 0, synth.Payload(size))
+					if errors.Is(err, client.ErrNeedKeyframe) || errors.Is(err, client.ErrBackpressure) {
+						mu.Lock()
+						force[i] = true
+						mu.Unlock()
+					}
+				}
+			}
+		}()
+	}
+	wg.Wait()
 }
