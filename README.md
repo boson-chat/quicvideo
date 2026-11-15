@@ -12,6 +12,8 @@ Standalone for now; it will merge with [quicvoice](https://github.com/boson-chat
 | Path | |
 |---|---|
 | `server/` | `quicvideod` (cobra: `serve`, `token`), relay, transport, auth, metrics |
+| `client/media` | capture, encode, decode: layer presets (`CameraLayers`, `ScreenLayers`), `LayerForTile`, the `Publisher` (one encoder per *watched* layer), and on macOS ScreenCaptureKit, AVFoundation and VideoToolbox (cgo; stubs elsewhere) |
+| `examples/macviewer` | native macOS client: publish camera/screen, view everyone in a grid with a pinned big tile |
 | `client/` | Go SDK: `Dial`, `Join`, `Publish` → `LocalTrack.WriteFrame` (non-blocking, per-layer queues), `Subscribe` (max layer), events, `OnFrame`, `Refresh`/`TokenSource`, automatic `ReceiverReport`s |
 | `wire/`, `proto/`, `gen/` | control framing, media stream format, protobuf |
 | `examples/pub` | publishes a synthetic 3-layer camera, or loops real H.264 files |
@@ -31,6 +33,25 @@ ffplay -f h264 out.h264
 make loadtest rooms=4 n=6
 make netem                        # bad-network scenarios in Docker → netem/results/results.md
 ```
+
+## macOS client (phase 3)
+
+```sh
+make macviewer                   # or: make macviewer-app (bin/macviewer.app, ad-hoc signed)
+bin/macviewer -list              # displays, windows, cameras, permission state
+bin/macviewer -insecure -token alice -camera -screen      # publish (and watch the others)
+bin/macviewer -insecure -token bob                        # watch
+```
+
+Click a tile to pin it big; click again to unpin. A screen share starts pinned. Each tile subscribes to the layer that fits its size in device pixels (`media.LayerForTile`); tiles that aren't shown, and everything while the window is minimized or covered, are unsubscribed. `-pattern` publishes a moving test pattern (no permissions needed). `-snapshot file.png` writes the tiles, and a real window screenshot when allowed.
+
+**Requirements:** macOS 13+ (ScreenCaptureKit, low-latency VideoToolbox), Apple silicon or Intel with a hardware H.264 encoder (a software fallback is used otherwise).
+
+**Permissions (TCC):**
+- **Screen Recording** — System Settings → Privacy & Security → Screen & System Audio Recording. The app asks once; after allowing it must be **restarted** (macOS applies it at launch). There is no Info.plist key for it.
+- **Camera** — System Settings → Privacy & Security → Camera. A bundled app needs **`NSCameraUsageDescription`** in its Info.plist (without it macOS kills the process when the camera opens); `examples/macviewer/Info.plist` is embedded into the binary (`-sectcreate __TEXT __info_plist`) and used for the `.app`.
+- Started from a terminal, both permissions belong to the **terminal app**, not the binary.
+- Missing permissions come back as `*media.PermissionError` (`errors.Is(err, media.ErrScreenPermission / ErrCameraPermission)`) with these instructions; the app logs them and carries on with whatever it can share.
 
 ## Configuration (env)
 

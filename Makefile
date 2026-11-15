@@ -1,4 +1,4 @@
-.PHONY: setup generate proto test vet run pub pub-h264 sub loadtest testdata docker netem
+.PHONY: setup generate proto test vet run pub pub-h264 sub loadtest testdata docker netem macviewer macviewer-app
 
 setup:
 	go mod download
@@ -72,3 +72,16 @@ docker:
 # Bad-network scenarios in Docker (tc netem/tbf); results in netem/results/results.md
 netem:
 	netem/run.sh
+
+# macOS viewer/publisher app (AppKit + ScreenCaptureKit + VideoToolbox).
+# Running it from a terminal attributes Camera/Screen Recording permissions
+# to the terminal; the bundle gets its own entry in System Settings.
+macviewer:
+	go build -o bin/macviewer ./examples/macviewer
+
+macviewer-app: macviewer
+	rm -rf bin/macviewer.app
+	mkdir -p bin/macviewer.app/Contents/MacOS
+	cp examples/macviewer/Info.plist bin/macviewer.app/Contents/Info.plist
+	cp bin/macviewer bin/macviewer.app/Contents/MacOS/macviewer
+	codesign --force --sign - bin/macviewer.app

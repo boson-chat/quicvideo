@@ -27,3 +27,17 @@ jobs:
                <(grep -v '^// .protoc ' gen/controlpb/control.pb.go)
       - run: go vet ./...
       - run: go test -race ./...
+
+  macos:
+    # The darwin media code (ScreenCaptureKit, AVFoundation, VideoToolbox)
+    # and the macviewer app. Capture needs TCC permissions a runner doesn't
+    # have, so only builds + the VideoToolbox round trip run here.
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - run: go vet ./client/... ./examples/macviewer/
+      - run: go test ./client/... ./examples/macviewer/
+      - run: go build -o /tmp/macviewer ./examples/macviewer

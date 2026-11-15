@@ -1,0 +1,360 @@
+// ScreenCaptureKit and AVFoundation capture, and TCC permission checks.
+#import <AVFoundation/AVFoundation.h>
+#import <AppKit/AppKit.h>
+#import <CoreGraphics/CoreGraphics.h>
+#import <CoreMedia/CoreMedia.h>
+#import <Foundation/Foundation.h>
+#import <ScreenCaptureKit/ScreenCaptureKit.h>
+#include <stdlib.h>
+#include <string.h>
+#include "media_darwin.h"
+
+extern void qvGoScreenFrame(uintptr_t handle, void *pb, int64_t us);
+extern void qvGoScreenStopped(uintptr_t handle, int code, char *msg);
+extern void qvGoCameraFrame(uintptr_t handle, void *pb, int64_t us);
+
+static char *nserr(NSString *prefix, NSError *err) {
+    NSString *s = err ? [NSString stringWithFormat:@"%@: %@ (%@ %ld)", prefix, err.localizedDescription, err.domain,
+                                                   (long)err.code]
+                      : prefix;
+    return strdup(s.UTF8String);
+}
+
+static char *jsonString(id obj) {
+    NSData *d = [NSJSONSerialization dataWithJSONObject:obj options:0 error:nil];
+    NSString *s = [[NSString alloc] initWithData:d encoding:NSUTF8StringEncoding];
+    return strdup(s.UTF8String);
+}
+
+static int64_t nowUS(void) { return (int64_t)([[NSDate date] timeIntervalSince1970] * 1e6); }
+
+// ---------------------------------------------------------------- TCC
+
+int qv_screen_access(void) { return CGPreflightScreenCaptureAccess() ? 1 : -1; }
+
+void qv_screen_request(void) { CGRequestScreenCaptureAccess(); }
+
+int qv_camera_access(void) {
+    switch ([AVCaptureDevice authorizationStatusForMediaType:AVMediaTypeVideo]) {
+    case AVAuthorizationStatusAuthorized:
+        return 1;
+    case AVAuthorizationStatusNotDetermined:
+        return -1;
+    default:
+        return 0;
+    }
+}
+
+int qv_camera_request(int timeout_ms) {
+    if (qv_camera_access() != -1) return qv_camera_access();
+    dispatch_semaphore_t sem = dispatch_semaphore_create(0);
+    [AVCaptureDevice requestAccessForMediaType:AVMediaTypeVideo
+                             completionHandler:^(BOOL granted) {
+                               dispatch_semaphore_signal(sem);
+                             }];
+    dispatch_semaphore_wait(sem, dispatch_time(DISPATCH_TIME_NOW, (int64_t)timeout_ms * NSEC_PER_MSEC));
+    return qv_camera_access();
+}
+
+// ---------------------------------------------------------------- screen
+
+static SCShareableContent *shareableContent(NSError **outErr) {
+    __block SCShareableContent *content = nil;
+    __block NSError *error = nil;
+    dispatch_semaphore_t sem = dispatch_semaphore_create(0);
+    [SCShareableContent getShareableContentExcludingDesktopWindows:YES
+                                               onScreenWindowsOnly:YES
+                                                 completionHandler:^(SCShareableContent *c, NSError *e) {
+                                                   content = c;
+                                                   error = e;
+                                                   dispatch_semaphore_signal(sem);
+                                                 }];
+    if (dispatch_semaphore_wait(sem, dispatch_time(DISPATCH_TIME_NOW, 10 * NSEC_PER_SEC)) != 0) {
+        *outErr = [NSError errorWithDomain:@"qv" code:-1 userInfo:@{NSLocalizedDescriptionKey : @"timed out"}];
+        return nil;
+    }
+    *outErr = error;
+    return content;
+}
+
+static void displayPixels(CGDirectDisplayID d, int *w, int *h) {
+    CGDisplayModeRef mode = CGDisplayCopyDisplayMode(d);
+    *w = (int)CGDisplayModeGetPixelWidth(mode);
+    *h = (int)CGDisplayModeGetPixelHeight(mode);
+    CGDisplayModeRelease(mode);
+}
+
+char *qv_screen_list(char **err) {
+    NSError *e = nil;
+    SCShareableContent *c = shareableContent(&e);
+    if (c == nil) {
+        *err = nserr(@"listing screens failed", e);
+        return NULL;
+    }
+    NSMutableArray *displays = [NSMutableArray array];
+    for (SCDisplay *d in c.displays) {
+        int w, h;
+        displayPixels(d.displayID, &w, &h);
+        [displays addObject:@{
+            @"id" : @(d.displayID), @"width" : @(w), @"height" : @(h),
+            @"main" : (d.displayID == CGMainDisplayID() ? @YES : @NO)
+        }];
+    }
+    NSMutableArray *windows = [NSMutableArray array];
+    for (SCWindow *w in c.windows) {
+        if (w.windowLayer != 0 || w.frame.size.width < 64 || w.frame.size.height < 64) continue; // normal windows
+        [windows addObject:@{
+            @"id" : @(w.windowID), @"title" : w.title ?: @"", @"app" : w.owningApplication.applicationName ?: @"",
+            @"width" : @((int)w.frame.size.width), @"height" : @((int)w.frame.size.height)
+        }];
+    }
+    return jsonString(@{@"displays" : displays, @"windows" : windows});
+}
+
+@interface QVScreenOutput : NSObject <SCStreamOutput, SCStreamDelegate>
+@property(nonatomic) uintptr_t handle;
+@end
+
+@implementation QVScreenOutput
+- (void)stream:(SCStream *)stream didOutputSampleBuffer:(CMSampleBufferRef)sb ofType:(SCStreamOutputType)type {
+    if (type != SCStreamOutputTypeScreen || !CMSampleBufferIsValid(sb)) return;
+    CFArrayRef atts = CMSampleBufferGetSampleAttachmentsArray(sb, false);
+    if (atts == NULL || CFArrayGetCount(atts) == 0) return;
+    NSDictionary *info = (__bridge NSDictionary *)CFArrayGetValueAtIndex(atts, 0);
+    NSNumber *status = info[SCStreamFrameInfoStatus];
+    // Idle = nothing changed since the last frame: no new image, nothing to
+    // encode. A static screen costs (almost) nothing.
+    if (status == nil || status.integerValue != SCFrameStatusComplete) return;
+    CVImageBufferRef pb = CMSampleBufferGetImageBuffer(sb);
+    if (pb == NULL) return;
+    qvGoScreenFrame(self.handle, (void *)pb, nowUS());
+}
+- (void)stream:(SCStream *)stream didStopWithError:(NSError *)error {
+    qvGoScreenStopped(self.handle, (int)error.code, nserr(@"screen capture stopped", error));
+}
+@end
+
+struct qv_screen {
+    void *stream; // SCStream (retained)
+    void *output; // QVScreenOutput (retained)
+};
+
+qv_screen *qv_screen_start(uint32_t display_id, uint32_t window_id, int width, int height, int fps, int show_cursor,
+                           uintptr_t handle, char **err) {
+    NSError *e = nil;
+    SCShareableContent *c = shareableContent(&e);
+    if (c == nil) {
+        *err = nserr(@"screen capture unavailable", e);
+        return NULL;
+    }
+    SCContentFilter *filter = nil;
+    int nw = 0, nh = 0;
+    if (window_id) {
+        for (SCWindow *w in c.windows) {
+            if (w.windowID == window_id) {
+                filter = [[SCContentFilter alloc] initWithDesktopIndependentWindow:w];
+                CGFloat scale = NSScreen.mainScreen.backingScaleFactor;
+                nw = (int)(w.frame.size.width * scale);
+                nh = (int)(w.frame.size.height * scale);
+            }
+        }
+    } else {
+        CGDirectDisplayID want = display_id ? display_id : CGMainDisplayID();
+        for (SCDisplay *d in c.displays) {
+            if (d.displayID == want) {
+                filter = [[SCContentFilter alloc] initWithDisplay:d excludingWindows:@[]];
+                displayPixels(d.displayID, &nw, &nh);
+            }
+        }
+    }
+    if (filter == nil) {
+        *err = strdup("no such display or window");
+        return NULL;
+    }
+    if (width <= 0 || height <= 0) {
+        width = nw;
+        height = nh;
+    }
+    SCStreamConfiguration *cfg = [[SCStreamConfiguration alloc] init];
+    cfg.width = (size_t)(width & ~1);
+    cfg.height = (size_t)(height & ~1);
+    cfg.minimumFrameInterval = CMTimeMake(1, fps > 0 ? fps : 15);
+    cfg.pixelFormat = kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange; // what the encoder wants
+    cfg.showsCursor = show_cursor ? YES : NO;
+    cfg.queueDepth = 5;
+    cfg.scalesToFit = YES;
+
+    QVScreenOutput *out = [[QVScreenOutput alloc] init];
+    out.handle = handle;
+    SCStream *stream = [[SCStream alloc] initWithFilter:filter configuration:cfg delegate:out];
+    dispatch_queue_t q = dispatch_queue_create("quicvideo.screen", DISPATCH_QUEUE_SERIAL);
+    if (![stream addStreamOutput:out type:SCStreamOutputTypeScreen sampleHandlerQueue:q error:&e]) {
+        *err = nserr(@"addStreamOutput failed", e);
+        return NULL;
+    }
+    __block NSError *startErr = nil;
+    dispatch_semaphore_t sem = dispatch_semaphore_create(0);
+    [stream startCaptureWithCompletionHandler:^(NSError *se) {
+      startErr = se;
+      dispatch_semaphore_signal(sem);
+    }];
+    dispatch_semaphore_wait(sem, dispatch_time(DISPATCH_TIME_NOW, 10 * NSEC_PER_SEC));
+    if (startErr) {
+        *err = nserr(@"starting screen capture failed", startErr);
+        return NULL;
+    }
+    qv_screen *s = calloc(1, sizeof(*s));
+    s->stream = (__bridge_retained void *)stream;
+    s->output = (__bridge_retained void *)out;
+    return s;
+}
+
+void qv_screen_stop(qv_screen *s) {
+    if (s == NULL) return;
+    SCStream *stream = (__bridge_transfer SCStream *)s->stream;
+    QVScreenOutput *out = (__bridge_transfer QVScreenOutput *)s->output;
+    dispatch_semaphore_t sem = dispatch_semaphore_create(0);
+    [stream stopCaptureWithCompletionHandler:^(NSError *e) {
+      dispatch_semaphore_signal(sem);
+    }];
+    dispatch_semaphore_wait(sem, dispatch_time(DISPATCH_TIME_NOW, 5 * NSEC_PER_SEC));
+    [stream removeStreamOutput:out type:SCStreamOutputTypeScreen error:nil];
+    free(s);
+}
+
+// ---------------------------------------------------------------- camera
+
+static NSArray<AVCaptureDevice *> *cameras(void) {
+    NSMutableArray *types = [NSMutableArray arrayWithObject:AVCaptureDeviceTypeBuiltInWideAngleCamera];
+    if (@available(macOS 14.0, *)) {
+        [types addObject:AVCaptureDeviceTypeExternal];
+        [types addObject:AVCaptureDeviceTypeContinuityCamera];
+    }
+    AVCaptureDeviceDiscoverySession *ds =
+        [AVCaptureDeviceDiscoverySession discoverySessionWithDeviceTypes:types
+                                                               mediaType:AVMediaTypeVideo
+                                                                position:AVCaptureDevicePositionUnspecified];
+    return ds.devices;
+}
+
+char *qv_camera_list(char **err) {
+    NSMutableArray *out = [NSMutableArray array];
+    for (AVCaptureDevice *d in cameras()) {
+        NSMutableDictionary *best = [NSMutableDictionary dictionary]; // "WxH" -> max fps
+        for (AVCaptureDeviceFormat *f in d.formats) {
+            CMVideoDimensions dim = CMVideoFormatDescriptionGetDimensions(f.formatDescription);
+            double maxFPS = 0;
+            for (AVFrameRateRange *r in f.videoSupportedFrameRateRanges) maxFPS = MAX(maxFPS, r.maxFrameRate);
+            NSString *k = [NSString stringWithFormat:@"%dx%d", dim.width, dim.height];
+            if ([best[k] doubleValue] < maxFPS) best[k] = @(maxFPS);
+        }
+        NSMutableArray *formats = [NSMutableArray array];
+        for (NSString *k in best) {
+            NSArray *wh = [k componentsSeparatedByString:@"x"];
+            [formats addObject:@{@"width" : @([wh[0] intValue]), @"height" : @([wh[1] intValue]),
+                                 @"max_fps" : @((int)round([best[k] doubleValue]))}];
+        }
+        [out addObject:@{@"id" : d.uniqueID, @"name" : d.localizedName, @"formats" : formats}];
+    }
+    return jsonString(out);
+}
+
+@interface QVCameraOutput : NSObject <AVCaptureVideoDataOutputSampleBufferDelegate>
+@property(nonatomic) uintptr_t handle;
+@end
+
+@implementation QVCameraOutput
+- (void)captureOutput:(AVCaptureOutput *)output
+    didOutputSampleBuffer:(CMSampleBufferRef)sb
+           fromConnection:(AVCaptureConnection *)connection {
+    CVImageBufferRef pb = CMSampleBufferGetImageBuffer(sb);
+    if (pb) qvGoCameraFrame(self.handle, (void *)pb, nowUS());
+}
+@end
+
+struct qv_camera {
+    void *session; // AVCaptureSession (retained)
+    void *output;  // QVCameraOutput (retained)
+};
+
+qv_camera *qv_camera_start(const char *unique_id, int width, int height, int fps, uintptr_t handle, char **err) {
+    AVCaptureDevice *dev = nil;
+    NSString *want = unique_id && unique_id[0] ? [NSString stringWithUTF8String:unique_id] : nil;
+    for (AVCaptureDevice *d in cameras()) {
+        if (want == nil || [d.uniqueID isEqualToString:want]) {
+            dev = d;
+            break;
+        }
+    }
+    if (want == nil) dev = [AVCaptureDevice defaultDeviceWithMediaType:AVMediaTypeVideo] ?: dev;
+    if (dev == nil) {
+        *err = strdup(want ? "no camera with that id" : "no camera found");
+        return NULL;
+    }
+    // Closest format by pixel count that supports the frame rate.
+    AVCaptureDeviceFormat *pick = nil;
+    double bestScore = 1e18;
+    for (AVCaptureDeviceFormat *f in dev.formats) {
+        CMVideoDimensions dim = CMVideoFormatDescriptionGetDimensions(f.formatDescription);
+        double maxFPS = 0;
+        for (AVFrameRateRange *r in f.videoSupportedFrameRateRanges) maxFPS = MAX(maxFPS, r.maxFrameRate);
+        double score = fabs((double)dim.width * dim.height - (double)width * height) + (maxFPS + 0.5 < fps ? 1e12 : 0);
+        if (score < bestScore) {
+            bestScore = score;
+            pick = f;
+        }
+    }
+    NSError *e = nil;
+    AVCaptureDeviceInput *in = [AVCaptureDeviceInput deviceInputWithDevice:dev error:&e];
+    if (in == nil) {
+        *err = nserr(@"opening the camera failed", e);
+        return NULL;
+    }
+    AVCaptureSession *session = [[AVCaptureSession alloc] init];
+    [session beginConfiguration];
+    if (![session canAddInput:in]) {
+        *err = strdup("cannot use this camera");
+        return NULL;
+    }
+    [session addInput:in];
+    if (pick && [dev lockForConfiguration:&e]) {
+        dev.activeFormat = pick;
+        for (AVFrameRateRange *r in pick.videoSupportedFrameRateRanges) {
+            if (r.minFrameRate <= fps && fps <= r.maxFrameRate) {
+                dev.activeVideoMinFrameDuration = CMTimeMake(1, fps);
+                dev.activeVideoMaxFrameDuration = CMTimeMake(1, fps);
+            }
+        }
+        [dev unlockForConfiguration];
+    }
+    AVCaptureVideoDataOutput *vo = [[AVCaptureVideoDataOutput alloc] init];
+    vo.videoSettings = @{(__bridge NSString *)kCVPixelBufferPixelFormatTypeKey : @(kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange)};
+    vo.alwaysDiscardsLateVideoFrames = YES;
+    QVCameraOutput *out = [[QVCameraOutput alloc] init];
+    out.handle = handle;
+    [vo setSampleBufferDelegate:out queue:dispatch_queue_create("quicvideo.camera", DISPATCH_QUEUE_SERIAL)];
+    if (![session canAddOutput:vo]) {
+        *err = strdup("cannot capture from this camera");
+        return NULL;
+    }
+    [session addOutput:vo];
+    [session commitConfiguration];
+    [session startRunning];
+    if (!session.running) {
+        *err = strdup("the camera did not start (in use by another app, or not permitted)");
+        return NULL;
+    }
+    qv_camera *c = calloc(1, sizeof(*c));
+    c->session = (__bridge_retained void *)session;
+    c->output = (__bridge_retained void *)out;
+    return c;
+}
+
+void qv_camera_stop(qv_camera *c) {
+    if (c == NULL) return;
+    AVCaptureSession *session = (__bridge_transfer AVCaptureSession *)c->session;
+    QVCameraOutput *out = (__bridge_transfer QVCameraOutput *)c->output;
+    [session stopRunning];
+    (void)out;
+    free(c);
+}
