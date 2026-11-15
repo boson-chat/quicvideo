@@ -364,6 +364,11 @@ func TestUnhealthyIngressLayerIsAvoided(t *testing.T) {
 		c.mu.Unlock()
 		must(t, in0.Frame(&wire.Frame{CaptureUS: us(5 * time.Millisecond), Payload: []byte{1}}))
 		must(t, in2.Frame(&wire.Frame{CaptureUS: us(600 * time.Millisecond), Payload: []byte{1}}))
+		// Let the forwarder keep up in real time, or the fake clock turns its
+		// queue into a (genuine-looking) backlog.
+		for c.sub.subs[c.track].backlogAge(c.clock()) > 0 {
+			time.Sleep(time.Millisecond)
+		}
 	}
 	c.advance(250 * time.Millisecond)
 	if l, _ := c.target(); l != 1 {
