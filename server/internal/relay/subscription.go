@@ -216,9 +216,13 @@ func (s *Subscription) supersede(congestion bool) {
 	// reset below, or the forwarder opening the next group, ends the old
 	// stream.
 	dropped := false
+	var oldest time.Time
 	for _, it := range s.queue {
 		if it.f != nil {
 			s.m.FrameDropped(metrics.DropSuperseded, it.size())
+			if !dropped || it.enq.Before(oldest) {
+				oldest = it.enq
+			}
 			dropped = true
 		}
 	}
@@ -227,7 +231,11 @@ func (s *Subscription) supersede(congestion bool) {
 	if dropped {
 		s.m.GroupDropped(metrics.DropSuperseded)
 		s.cancelWriter()
-		if congestion {
+		// Only a backlog that had waited means the subscriber fell behind.
+		// Two keyframes back to back (a new layer's first frame and a
+		// keyframe request, say) supersede a frame that was queued a moment
+		// ago: that's not congestion.
+		if congestion && s.member.r.opts.Now().Sub(oldest) >= s.member.r.opts.BacklogDown/3 {
 			s.member.cuts.Add(1)
 		}
 	}

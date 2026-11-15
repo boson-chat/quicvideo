@@ -429,3 +429,32 @@ func TestControllerDoesNotPauseWhenLowestLayersFit(t *testing.T) {
 		w.gate <- struct{}{}
 	}
 }
+
+func TestBackToBackKeyframesAreNotACut(t *testing.T) {
+	c := newCtrlEnv(t, 5_000_000)
+	c.subP.gated = true // nothing drains: whatever is queued stays queued
+	must(t, c.sub.Subscribe(c.track, 2, 0))
+	in := c.open(2, 1)
+	must(t, in.Frame(frame(true, 10, 'a')))
+	w := c.subP.nextWriter(t)
+	must(t, in.Frame(frame(false, 10, 'b')))
+	// A new group right away (a keyframe request answered at once).
+	in2 := c.open(2, 2)
+	must(t, in2.Frame(frame(true, 10, 'c')))
+	if n := c.sub.cuts.Load(); n != 0 {
+		t.Fatalf("back-to-back keyframes counted as %d cut(s)", n)
+	}
+	// A group superseding a backlog that waited 200 ms is a real cut.
+	must(t, in2.Frame(frame(false, 10, 'd')))
+	c.mu.Lock()
+	c.now = c.now.Add(200 * time.Millisecond)
+	c.mu.Unlock()
+	in3 := c.open(2, 3)
+	must(t, in3.Frame(frame(true, 10, 'e')))
+	if n := c.sub.cuts.Load(); n != 1 {
+		t.Fatalf("aged backlog superseded: %d cuts, want 1", n)
+	}
+	if _, canceled, _ := w.state(); !canceled {
+		t.Fatal("the superseded group's stream should be reset")
+	}
+}
