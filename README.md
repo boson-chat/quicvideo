@@ -60,6 +60,8 @@ The UI is [Gio](https://gioui.org): the same viewer runs on macOS and Linux toda
 - **Screen sharing:** goes through xdg-desktop-portal, which shows the system picker. The choice is remembered with a restore token in `~/.config/quicvideo/`, so later shares start without asking.
 - **Cameras:** V4L2. Your user needs access to `/dev/video*`, usually through the `video` group.
 
+**Windows requirements:** Windows 10 1903+ (Windows.Graphics.Capture) with Media Foundation. On Windows Server, install the Media Foundation feature. A hardware H.264 encoder MFT (NVIDIA, AMD, Intel) is used when there is one; the Microsoft software encoder otherwise. Cameras need Settings → Privacy & security → Camera → "Let desktop apps access your camera". Builds need cgo with mingw-w64 (e.g. MSYS2 UCRT64 gcc). **There was no Windows machine to test on: the Windows backend has only run in CI** (see the `windows` job), so treat it as untested on real hardware.
+
 **Permissions (TCC):**
 - **Screen Recording:** System Settings → Privacy & Security → Screen & System Audio Recording. The app asks once; after allowing, it must be **restarted** (macOS applies it at launch). There is no Info.plist key for it.
 - **Camera:** System Settings → Privacy & Security → Camera. The app needs **`NSCameraUsageDescription`** in its Info.plist; without it macOS kills the process when the camera opens. `examples/viewer/Info.plist` is embedded into the binary (`-sectcreate __TEXT __info_plist`) and used for the `.app`.

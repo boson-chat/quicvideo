@@ -244,6 +244,40 @@ Encoders scale and convert with libswscale. Output is normalized to quicvideo's 
 - **Cross-platform call:** a Linux viewer published an NVENC-encoded camera to a Mac viewer, and decoded the Mac's VideoToolbox screen share and camera.
 - **Untested:** there's no webcam on that machine, so V4L2 is untested on real hardware (it would need v4l2loopback, a kernel module).
 
+## Client media on Windows
+
+Plain C through cgo (mingw-w64), the same `client/media` API.
+
+**Encode:** a Media Foundation H.264 encoder MFT. Hardware MFTs (NVIDIA, AMD, Intel) are tried first; they're asynchronous, so the code drives them with `METransformNeedInput` / `METransformHaveOutput` events. The Microsoft software "H264 Encoder MFT" is the synchronous fallback. Settings, via `ICodecAPI`:
+- CBR at the layer bitrate;
+- GOP at the layer's keyframe interval;
+- no B-frames;
+- `AVLowLatencyMode`;
+- keyframes forced with `AVEncVideoForceKeyFrame`.
+
+If an encoder doesn't repeat SPS/PPS in-band on keyframes, the sequence header from the output type is prepended.
+
+**Decode:** the Microsoft H.264 decoder MFT, in low-latency mode. It handles stream changes (layer switches) and crops to the display aperture (e.g. 1080 visible rows in a 1088-row buffer).
+
+**Pictures:** top-down BGRA. BGRA ↔ NV12 conversion (BT.601, bilinear scaling) is our own C code.
+
+**Camera:** the Media Foundation source reader with video processing enabled, which gives RGB32. It picks the native size closest to the request at the needed frame rate. `E_ACCESSDENIED` maps to a `PermissionError` pointing at Settings → Privacy & security → Camera.
+
+**Screen:** Windows.Graphics.Capture (Windows 10 1903+), for monitors (`EnumDisplayMonitors`) and windows (`EnumWindows`, skipping cloaked and tool windows).
+- **Device:** D3D11 (hardware, or WARP).
+- **Capture:** a free-threaded frame pool polled at the fps cap. The pool only yields a frame when the content changed.
+- **Readback:** a staging texture copies frames to BGRA, and the pool is recreated when the window is resized.
+- **Headers:** mingw-w64 only ships part of the WinRT capture headers, so the needed interfaces (capture item, frame pool and its statics, frame, session, `IDirect3DDxgiInterfaceAccess`, `IClosable`) are declared in `wgc_windows.c` from the Windows SDK IDL.
+
+**There is no Windows machine to test on.** CI (`windows-latest`, MSYS2 UCRT64 gcc) is where this code runs. There it passes:
+- the Media Foundation software encode → decode round trip;
+- a real Windows.Graphics.Capture of the runner's 1024×768 desktop, which validates the hand-declared WinRT interfaces;
+- the conversion tests;
+- monitor and window listing;
+- the viewer build.
+
+**Untested anywhere:** hardware encoder MFTs (the asynchronous path) and real webcams.
+
 ## Phases
 
 1. **Done: relay working end to end.** Wire format, relay, Go SDK, pub/sub bots (synthetic and real H.264), load test, metrics.
@@ -251,7 +285,7 @@ Encoders scale and convert with libswscale. Output is normalized to quicvideo's 
 3. **Real capture, encode and decode.**
    - **macOS: done.** ScreenCaptureKit, AVFoundation and VideoToolbox.
    - **Linux: done.** Portal + PipeWire, V4L2, NVENC / VA-API / openh264.
-   - **Windows:** next.
+   - **Windows: done (CI-only).** Windows.Graphics.Capture, Media Foundation.
 
    The viewer (Gio) is shared.
 4. **Browsers.** WebTransport + WebCodecs on the same stream-per-group design.

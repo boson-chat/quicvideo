@@ -50,3 +50,27 @@ jobs:
         run: |
           go build -o /tmp/viewer ./examples/viewer 2>&1 | tee /tmp/build.log
           ! grep -q "warning" /tmp/build.log
+
+  windows:
+    # Windows media backend (Media Foundation, Windows.Graphics.Capture) and
+    # the viewer. There's no Windows dev machine: this job is the only place
+    # the Windows code runs. Hardware-dependent tests skip with a reason.
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - uses: msys2/setup-msys2@v2
+        id: msys2
+        with:
+          msystem: UCRT64
+          install: mingw-w64-ucrt-x86_64-gcc
+      - name: Use MSYS2's gcc for cgo
+        shell: pwsh
+        run: Add-Content $env:GITHUB_PATH "${{ steps.msys2.outputs.msys2-location }}\ucrt64\bin"
+      - run: go vet ./...
+      - name: Media tests (verbose, to see what ran or skipped)
+        run: go test -v -count=1 ./client/media/
+      - run: go test -count=1 ./...
+      - run: go build -o viewer.exe ./examples/viewer
