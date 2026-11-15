@@ -75,6 +75,27 @@ struct qv_avcap {
     volatile int stop;
 };
 
+// ownedFrame: the frame to hand to Go. For raw device formats (NV12,
+// YUYV...) the rawvideo decoder's frames point into the V4L2 driver's
+// mmap'd buffers; Go keeps pictures (the publisher holds the last one for
+// keyframe re-encodes), which starved the driver of buffers, and after
+// close they were unmapped under us ("Some buffers are still owned by the
+// caller on close", then VIDIOC_QBUF on a closed fd). Those are copied into
+// frames we own; decoded MJPEG frames already are.
+static AVFrame *ownedFrame(struct qv_avcap *c, AVFrame *f) {
+    if (c->dec->codec_id != AV_CODEC_ID_RAWVIDEO) return av_frame_clone(f);
+    AVFrame *out = av_frame_alloc();
+    if (!out) return NULL;
+    out->format = f->format;
+    out->width = f->width;
+    out->height = f->height;
+    if (av_frame_get_buffer(out, 0) < 0 || av_frame_copy(out, f) < 0 || av_frame_copy_props(out, f) < 0) {
+        av_frame_free(&out);
+        return NULL;
+    }
+    return out;
+}
+
 static void *avcapLoop(void *arg) {
     struct qv_avcap *c = arg;
     AVPacket *pkt = av_packet_alloc();
@@ -92,9 +113,9 @@ static void *avcapLoop(void *arg) {
         }
         if (pkt->stream_index == c->stream && avcodec_send_packet(c->dec, pkt) >= 0) {
             while (avcodec_receive_frame(c->dec, f) >= 0) {
-                AVFrame *out = av_frame_clone(f);
+                AVFrame *out = ownedFrame(c, f);
                 av_frame_unref(f);
-                qvGoCapFrame(c->handle, out, nowUS());
+                if (out) qvGoCapFrame(c->handle, out, nowUS());
             }
         }
         av_packet_unref(pkt);
