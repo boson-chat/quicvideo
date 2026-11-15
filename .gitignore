@@ -1,0 +1,4 @@
+/bin/
+/testdata/*.h264
+*.h264
+.DS_Store

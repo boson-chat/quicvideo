@@ -1,0 +1,143 @@
+package commands
+
+import (
+	"context"
+	"crypto/tls"
+	"errors"
+	"os/signal"
+	"syscall"
+	"time"
+
+	"github.com/boson-chat/quicvideo/server/config"
+	"github.com/boson-chat/quicvideo/server/http"
+	"github.com/boson-chat/quicvideo/server/internal/certs"
+	"github.com/boson-chat/quicvideo/server/internal/logger"
+	"github.com/boson-chat/quicvideo/server/internal/relay"
+	"github.com/boson-chat/quicvideo/server/internal/services/auth"
+	"github.com/boson-chat/quicvideo/server/internal/transport"
+	"github.com/boson-chat/quicvideo/server/metrics"
+	"github.com/spf13/cobra"
+	"golang.org/x/sync/errgroup"
+)
+
+var serveCmd = &cobra.Command{
+	Use:   "serve",
+	Short: "Start the QUIC video relay, the public HTTP listener and the health/metrics listener",
+	RunE: func(cmd *cobra.Command, args []string) error {
+		cfg := config.LoadConfigOrPanic()
+
+		l := logger.Logger(
+			logger.WithServerName(cfg.AppConfig.APPName),
+			logger.WithVersion(cfg.AppConfig.Version),
+			logger.WithEnvironment(cfg.AppConfig.Env),
+		)
+
+		ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+		defer stop()
+		ctx = logger.WithLogger(ctx, l)
+
+		provider, err := metrics.NewProvider(ctx, cfg)
+		if err != nil {
+			return err
+		}
+		defer shutdownMetrics(ctx, provider)
+		if p := provider.OTLPProtocol(); p != "" {
+			l.Info().Str("protocol", p).Msg("OTLP metrics push enabled")
+		}
+		m, err := metrics.New(provider.MeterProvider())
+		if err != nil {
+			return err
+		}
+
+		authService, err := BuildAuth(ctx, cfg.AuthConfig)
+		if err != nil {
+			return err
+		}
+		if cfg.AuthConfig.Insecure {
+			l.Warn().Msg("AUTH_INSECURE is on: any token is accepted")
+		}
+
+		tlsConf, err := BuildTLS(cfg.QUICConfig)
+		if err != nil {
+			return err
+		}
+		r := relay.New(ctx, RelayOptions(cfg, m))
+		quicServer := transport.NewServer(cfg, tlsConf, authService, r, m)
+
+		g, gctx := errgroup.WithContext(ctx)
+		g.Go(func() error { return quicServer.Serve(gctx) })
+		g.Go(func() error {
+			return http.StartServerWithContext(gctx, cfg.HTTPConfig.Addr, cfg.AppConfig.Version, provider.Handler())
+		})
+		if addr := cfg.HTTPConfig.PublicAddr; addr != "" {
+			g.Go(func() error { return http.StartPublicServerWithContext(gctx, addr) })
+		}
+		return g.Wait()
+	},
+}
+
+// RelayOptions maps the config to relay limits.
+func RelayOptions(cfg config.Config, m *metrics.Metrics) relay.Options {
+	rc := cfg.RelayConfig
+	return relay.Options{
+		MaxParticipants:         cfg.RoomConfig.MaxParticipants,
+		MaxTracksPerSession:     rc.MaxTracksPerSession,
+		MaxLayers:               rc.MaxLayers,
+		MaxTrackBitrate:         rc.MaxTrackBitrate,
+		IngressSlack:            rc.IngressSlack,
+		GroupCacheBytes:         rc.GroupCacheBytes,
+		SubQueueBytes:           rc.SubQueueBytes,
+		KeyframeRequestInterval: rc.KeyframeRequestInterval,
+		Metrics:                 m,
+	}
+}
+
+func shutdownMetrics(ctx context.Context, p *metrics.Provider) {
+	sctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	defer cancel()
+	if err := p.Shutdown(sctx); err != nil {
+		logger.FromCtx(ctx).Warn().Err(err).Msg("metrics shutdown")
+	}
+}
+
+// BuildAuth picks the token verifier(s) from config.
+func BuildAuth(ctx context.Context, a config.AuthConfig) (auth.AuthServiceImpl, error) {
+	if a.Insecure {
+		return auth.NewInsecureAuthService(), nil
+	}
+	comp := &auth.CompositeAuthService{}
+	if a.JWTSecret != "" {
+		comp.HMAC = auth.NewJWTAuthService(a.JWTSecret)
+	}
+	if a.JWKSURL != "" {
+		j, err := auth.NewJWKSAuthService(ctx, a.JWKSURL, a.Issuer, a.Audience)
+		if err != nil {
+			return nil, err
+		}
+		comp.JWKS = j
+	}
+	if comp.HMAC == nil && comp.JWKS == nil {
+		return nil, errors.New("set AUTH_JWKS_URL and/or JWT_SECRET, or AUTH_INSECURE=true for testing")
+	}
+	return comp, nil
+}
+
+// BuildTLS loads the cert files, or makes a self-signed dev cert.
+func BuildTLS(q config.QUICConfig) (*tls.Config, error) {
+	if q.CertFile != "" {
+		src, err := certs.NewFileSource(q.CertFile, q.KeyFile)
+		if err != nil {
+			return nil, err
+		}
+		return &tls.Config{GetCertificate: src.GetCertificate}, nil
+	}
+	c, err := certs.SelfSigned(q.DevHostname)
+	if err != nil {
+		return nil, err
+	}
+	return &tls.Config{Certificates: []tls.Certificate{c}}, nil
+}
+
+func init() {
+	rootCmd.AddCommand(serveCmd)
+}

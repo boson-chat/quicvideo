@@ -1,0 +1,166 @@
+// Control stream messages. Framed as [varint length][ControlMessage] on the
+// first bidirectional stream the client opens. Media never goes here: it
+// travels on unidirectional streams, one per group of pictures (see
+// docs/protocol.md and wire/media.go).
+syntax = "proto3";
+
+package quicvideo.v1;
+
+option go_package = "github.com/boson-chat/quicvideo/gen/controlpb";
+
+message ControlMessage {
+  oneof msg {
+    // handshake
+    Hello hello = 1;
+    Welcome welcome = 2;
+    Error error = 3;
+
+    // rooms
+    Join join = 10;
+    Leave leave = 11;
+    RoomState room_state = 12;
+    ParticipantJoined participant_joined = 13;
+    ParticipantLeft participant_left = 14;
+
+    // publishing
+    Publish publish = 20;
+    PublishOK publish_ok = 21;
+    Unpublish unpublish = 22;
+    TrackAdded track_added = 23;
+    TrackRemoved track_removed = 24;
+    KeyframeRequest keyframe_request = 25;
+
+    // subscribing
+    Subscribe subscribe = 30;
+    Unsubscribe unsubscribe = 31;
+    ReceiverReport receiver_report = 32;
+
+    Ping ping = 60;
+    Pong pong = 61;
+  }
+}
+
+message Hello {
+  string token = 1;          // JWT (auth service, audience quicvideo)
+  string client_version = 2;
+  repeated string capabilities = 3;
+}
+
+message Welcome {
+  uint32 session_id = 1;
+  uint32 max_frame_size = 2;       // bytes
+  uint32 max_tracks = 3;           // per session
+  uint32 max_layers = 4;           // per track
+  uint64 max_track_bitrate = 5;    // bits/s, sum of a track's layers
+  repeated string capabilities = 6;
+}
+
+message Error {
+  enum Code {
+    UNKNOWN = 0;
+    UNAUTHENTICATED = 1;
+    TOKEN_EXPIRED = 2;
+    FORBIDDEN = 3;
+    ROOM_FULL = 4;
+    ROOM_NOT_FOUND = 5;
+    PROTOCOL = 6;
+    KICKED = 7;
+    LIMIT = 8;           // too many tracks/layers, bitrate too high
+    TRACK_NOT_FOUND = 9;
+    NOT_IN_ROOM = 10;
+  }
+  Code code = 1;
+  string message = 2;
+  bool fatal = 3;            // server closes the connection after sending
+  string client_ref = 4;     // echoes Publish.client_ref when a publish failed
+}
+
+message Join { string room = 1; }
+message Leave {}
+
+message Participant {
+  uint32 session_id = 1;
+  string user_id = 2;
+  string display_name = 3;
+}
+
+enum TrackKind {
+  TRACK_KIND_UNSPECIFIED = 0;
+  CAMERA = 1;
+  SCREEN = 2;
+}
+
+// One simulcast encoding of a track. id is the layer number used in media
+// stream headers; 0 is the lowest quality by convention.
+message Layer {
+  uint32 id = 1;
+  uint32 width = 2;
+  uint32 height = 3;
+  uint32 fps = 4;
+  uint64 bitrate = 5;        // bits/s (target)
+}
+
+message Track {
+  uint32 track_id = 1;       // server-assigned, unique per server
+  uint32 session_id = 2;     // owner
+  TrackKind kind = 3;
+  string codec = 4;          // "h264"
+  repeated Layer layers = 5;
+}
+
+message RoomState {
+  string room = 1;
+  uint32 your_session_id = 2;
+  repeated Participant participants = 3;
+  repeated Track tracks = 4;
+}
+
+message ParticipantJoined { Participant participant = 1; }
+message ParticipantLeft { uint32 session_id = 1; string reason = 2; }
+
+message Publish {
+  string client_ref = 1;     // echoed in PublishOK / Error
+  TrackKind kind = 2;
+  string codec = 3;
+  repeated Layer layers = 4;
+}
+
+message PublishOK {
+  string client_ref = 1;
+  uint32 track_id = 2;
+}
+
+message Unpublish { uint32 track_id = 1; }
+
+message TrackAdded { Track track = 1; }
+message TrackRemoved { uint32 track_id = 1; }
+
+// Server → publisher: start a new group (keyframe) on this layer soon.
+message KeyframeRequest {
+  uint32 track_id = 1;
+  uint32 layer = 2;
+}
+
+// Set (or replace) the subscription to a track. The switch to a new layer
+// happens at that layer's next group start.
+message Subscribe {
+  uint32 track_id = 1;
+  uint32 layer = 2;
+  // 0 = server default (screen 1, camera 4). 1..7 = QUIC stream urgency,
+  // lower is more important.
+  uint32 priority = 3;
+}
+
+message Unsubscribe { uint32 track_id = 1; }
+
+// Placeholder for phase 2 rate control.
+message ReceiverReport {
+  uint32 track_id = 1;
+  uint32 layer = 2;
+  uint32 frames_received = 3;
+  uint32 groups_dropped = 4;
+  uint32 avg_delay_ms = 5;
+}
+
+message Ping { uint64 id = 1; }
+message Pong { uint64 id = 1; }
