@@ -166,9 +166,13 @@ type ControlMessage struct {
 	//	*ControlMessage_TrackAdded
 	//	*ControlMessage_TrackRemoved
 	//	*ControlMessage_KeyframeRequest
+	//	*ControlMessage_LayerActive
 	//	*ControlMessage_Subscribe
 	//	*ControlMessage_Unsubscribe
 	//	*ControlMessage_ReceiverReport
+	//	*ControlMessage_SubscriptionState
+	//	*ControlMessage_Refresh
+	//	*ControlMessage_RefreshOk
 	//	*ControlMessage_Ping
 	//	*ControlMessage_Pong
 	Msg           isControlMessage_Msg `protobuf_oneof:"msg"`
@@ -339,6 +343,15 @@ func (x *ControlMessage) GetKeyframeRequest() *KeyframeRequest {
 	return nil
 }
 
+func (x *ControlMessage) GetLayerActive() *LayerActive {
+	if x != nil {
+		if x, ok := x.Msg.(*ControlMessage_LayerActive); ok {
+			return x.LayerActive
+		}
+	}
+	return nil
+}
+
 func (x *ControlMessage) GetSubscribe() *Subscribe {
 	if x != nil {
 		if x, ok := x.Msg.(*ControlMessage_Subscribe); ok {
@@ -361,6 +374,33 @@ func (x *ControlMessage) GetReceiverReport() *ReceiverReport {
 	if x != nil {
 		if x, ok := x.Msg.(*ControlMessage_ReceiverReport); ok {
 			return x.ReceiverReport
+		}
+	}
+	return nil
+}
+
+func (x *ControlMessage) GetSubscriptionState() *SubscriptionState {
+	if x != nil {
+		if x, ok := x.Msg.(*ControlMessage_SubscriptionState); ok {
+			return x.SubscriptionState
+		}
+	}
+	return nil
+}
+
+func (x *ControlMessage) GetRefresh() *Refresh {
+	if x != nil {
+		if x, ok := x.Msg.(*ControlMessage_Refresh); ok {
+			return x.Refresh
+		}
+	}
+	return nil
+}
+
+func (x *ControlMessage) GetRefreshOk() *RefreshOK {
+	if x != nil {
+		if x, ok := x.Msg.(*ControlMessage_RefreshOk); ok {
+			return x.RefreshOk
 		}
 	}
 	return nil
@@ -447,6 +487,10 @@ type ControlMessage_KeyframeRequest struct {
 	KeyframeRequest *KeyframeRequest `protobuf:"bytes,25,opt,name=keyframe_request,json=keyframeRequest,proto3,oneof"`
 }
 
+type ControlMessage_LayerActive struct {
+	LayerActive *LayerActive `protobuf:"bytes,26,opt,name=layer_active,json=layerActive,proto3,oneof"`
+}
+
 type ControlMessage_Subscribe struct {
 	// subscribing
 	Subscribe *Subscribe `protobuf:"bytes,30,opt,name=subscribe,proto3,oneof"`
@@ -458,6 +502,19 @@ type ControlMessage_Unsubscribe struct {
 
 type ControlMessage_ReceiverReport struct {
 	ReceiverReport *ReceiverReport `protobuf:"bytes,32,opt,name=receiver_report,json=receiverReport,proto3,oneof"`
+}
+
+type ControlMessage_SubscriptionState struct {
+	SubscriptionState *SubscriptionState `protobuf:"bytes,33,opt,name=subscription_state,json=subscriptionState,proto3,oneof"`
+}
+
+type ControlMessage_Refresh struct {
+	// session
+	Refresh *Refresh `protobuf:"bytes,40,opt,name=refresh,proto3,oneof"`
+}
+
+type ControlMessage_RefreshOk struct {
+	RefreshOk *RefreshOK `protobuf:"bytes,41,opt,name=refresh_ok,json=refreshOk,proto3,oneof"`
 }
 
 type ControlMessage_Ping struct {
@@ -496,11 +553,19 @@ func (*ControlMessage_TrackRemoved) isControlMessage_Msg() {}
 
 func (*ControlMessage_KeyframeRequest) isControlMessage_Msg() {}
 
+func (*ControlMessage_LayerActive) isControlMessage_Msg() {}
+
 func (*ControlMessage_Subscribe) isControlMessage_Msg() {}
 
 func (*ControlMessage_Unsubscribe) isControlMessage_Msg() {}
 
 func (*ControlMessage_ReceiverReport) isControlMessage_Msg() {}
+
+func (*ControlMessage_SubscriptionState) isControlMessage_Msg() {}
+
+func (*ControlMessage_Refresh) isControlMessage_Msg() {}
+
+func (*ControlMessage_RefreshOk) isControlMessage_Msg() {}
 
 func (*ControlMessage_Ping) isControlMessage_Msg() {}
 
@@ -574,8 +639,12 @@ type Welcome struct {
 	MaxLayers       uint32                 `protobuf:"varint,4,opt,name=max_layers,json=maxLayers,proto3" json:"max_layers,omitempty"`                     // per track
 	MaxTrackBitrate uint64                 `protobuf:"varint,5,opt,name=max_track_bitrate,json=maxTrackBitrate,proto3" json:"max_track_bitrate,omitempty"` // bits/s, sum of a track's layers
 	Capabilities    []string               `protobuf:"bytes,6,rep,name=capabilities,proto3" json:"capabilities,omitempty"`
-	unknownFields   protoimpl.UnknownFields
-	sizeCache       protoimpl.SizeCache
+	// When the token expires (Unix seconds, 0 = never). Send Refresh before
+	// then; after it the server warns (Error TOKEN_EXPIRED, not fatal) and
+	// closes the session after a short grace period.
+	TokenExpiresAt int64 `protobuf:"varint,7,opt,name=token_expires_at,json=tokenExpiresAt,proto3" json:"token_expires_at,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
 }
 
 func (x *Welcome) Reset() {
@@ -648,6 +717,13 @@ func (x *Welcome) GetCapabilities() []string {
 		return x.Capabilities
 	}
 	return nil
+}
+
+func (x *Welcome) GetTokenExpiresAt() int64 {
+	if x != nil {
+		return x.TokenExpiresAt
+	}
+	return 0
 }
 
 type Error struct {
@@ -1481,12 +1557,15 @@ func (x *KeyframeRequest) GetLayer() uint32 {
 	return 0
 }
 
-// Set (or replace) the subscription to a track. The switch to a new layer
-// happens at that layer's next group start.
+// Set (or replace) the subscription to a track. `layer` is the HIGHEST
+// layer the client wants (e.g. what fits its tile); the server picks the
+// layer it actually forwards from its bandwidth estimate for this client
+// and reports it in SubscriptionState. Layer switches happen at group
+// starts.
 type Subscribe struct {
 	state   protoimpl.MessageState `protogen:"open.v1"`
 	TrackId uint32                 `protobuf:"varint,1,opt,name=track_id,json=trackId,proto3" json:"track_id,omitempty"`
-	Layer   uint32                 `protobuf:"varint,2,opt,name=layer,proto3" json:"layer,omitempty"`
+	Layer   uint32                 `protobuf:"varint,2,opt,name=layer,proto3" json:"layer,omitempty"` // max layer
 	// 0 = server default (screen 1, camera 4). 1..7 = QUIC stream urgency,
 	// lower is more important.
 	Priority      uint32 `protobuf:"varint,3,opt,name=priority,proto3" json:"priority,omitempty"`
@@ -1589,14 +1668,21 @@ func (x *Unsubscribe) GetTrackId() uint32 {
 	return 0
 }
 
-// Placeholder for phase 2 rate control.
+// Client → server, about once a second per subscribed track, covering the
+// time since the previous report. Delays are relative: arrival minus
+// capture time, minus the smallest such value seen recently, so clock
+// offsets between machines cancel out.
 type ReceiverReport struct {
 	state          protoimpl.MessageState `protogen:"open.v1"`
 	TrackId        uint32                 `protobuf:"varint,1,opt,name=track_id,json=trackId,proto3" json:"track_id,omitempty"`
 	Layer          uint32                 `protobuf:"varint,2,opt,name=layer,proto3" json:"layer,omitempty"`
 	FramesReceived uint32                 `protobuf:"varint,3,opt,name=frames_received,json=framesReceived,proto3" json:"frames_received,omitempty"`
-	GroupsDropped  uint32                 `protobuf:"varint,4,opt,name=groups_dropped,json=groupsDropped,proto3" json:"groups_dropped,omitempty"`
-	AvgDelayMs     uint32                 `protobuf:"varint,5,opt,name=avg_delay_ms,json=avgDelayMs,proto3" json:"avg_delay_ms,omitempty"`
+	GroupsDropped  uint32                 `protobuf:"varint,4,opt,name=groups_dropped,json=groupsDropped,proto3" json:"groups_dropped,omitempty"` // groups cut short (reset)
+	AvgDelayMs     uint32                 `protobuf:"varint,5,opt,name=avg_delay_ms,json=avgDelayMs,proto3" json:"avg_delay_ms,omitempty"`        // mean relative delay
+	LateFrames     uint32                 `protobuf:"varint,6,opt,name=late_frames,json=lateFrames,proto3" json:"late_frames,omitempty"`          // relative delay over 150 ms
+	StallMs        uint32                 `protobuf:"varint,7,opt,name=stall_ms,json=stallMs,proto3" json:"stall_ms,omitempty"`                   // time with no frames beyond ~3 frame intervals
+	DecodeStalls   uint32                 `protobuf:"varint,8,opt,name=decode_stalls,json=decodeStalls,proto3" json:"decode_stalls,omitempty"`    // reported by the app (decoder starved/errors)
+	IntervalMs     uint32                 `protobuf:"varint,9,opt,name=interval_ms,json=intervalMs,proto3" json:"interval_ms,omitempty"`          // period this report covers
 	unknownFields  protoimpl.UnknownFields
 	sizeCache      protoimpl.SizeCache
 }
@@ -1666,6 +1752,281 @@ func (x *ReceiverReport) GetAvgDelayMs() uint32 {
 	return 0
 }
 
+func (x *ReceiverReport) GetLateFrames() uint32 {
+	if x != nil {
+		return x.LateFrames
+	}
+	return 0
+}
+
+func (x *ReceiverReport) GetStallMs() uint32 {
+	if x != nil {
+		return x.StallMs
+	}
+	return 0
+}
+
+func (x *ReceiverReport) GetDecodeStalls() uint32 {
+	if x != nil {
+		return x.DecodeStalls
+	}
+	return 0
+}
+
+func (x *ReceiverReport) GetIntervalMs() uint32 {
+	if x != nil {
+		return x.IntervalMs
+	}
+	return 0
+}
+
+// Server → subscriber: what it is getting for a track. Sent when any
+// field changes.
+type SubscriptionState struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	TrackId       uint32                 `protobuf:"varint,1,opt,name=track_id,json=trackId,proto3" json:"track_id,omitempty"`
+	Layer         uint32                 `protobuf:"varint,2,opt,name=layer,proto3" json:"layer,omitempty"`                                // layer being forwarded now
+	TargetLayer   uint32                 `protobuf:"varint,3,opt,name=target_layer,json=targetLayer,proto3" json:"target_layer,omitempty"` // layer the server is switching to (== layer when settled)
+	MaxLayer      uint32                 `protobuf:"varint,4,opt,name=max_layer,json=maxLayer,proto3" json:"max_layer,omitempty"`          // from Subscribe
+	Paused        bool                   `protobuf:"varint,5,opt,name=paused,proto3" json:"paused,omitempty"`                              // not enough bandwidth for even the lowest layer
+	EstimateBps   uint64                 `protobuf:"varint,6,opt,name=estimate_bps,json=estimateBps,proto3" json:"estimate_bps,omitempty"` // server's bandwidth estimate for this client
+	Forwarding    bool                   `protobuf:"varint,7,opt,name=forwarding,proto3" json:"forwarding,omitempty"`                      // false until the first group of `layer` has gone out
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *SubscriptionState) Reset() {
+	*x = SubscriptionState{}
+	mi := &file_control_proto_msgTypes[21]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SubscriptionState) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SubscriptionState) ProtoMessage() {}
+
+func (x *SubscriptionState) ProtoReflect() protoreflect.Message {
+	mi := &file_control_proto_msgTypes[21]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SubscriptionState.ProtoReflect.Descriptor instead.
+func (*SubscriptionState) Descriptor() ([]byte, []int) {
+	return file_control_proto_rawDescGZIP(), []int{21}
+}
+
+func (x *SubscriptionState) GetTrackId() uint32 {
+	if x != nil {
+		return x.TrackId
+	}
+	return 0
+}
+
+func (x *SubscriptionState) GetLayer() uint32 {
+	if x != nil {
+		return x.Layer
+	}
+	return 0
+}
+
+func (x *SubscriptionState) GetTargetLayer() uint32 {
+	if x != nil {
+		return x.TargetLayer
+	}
+	return 0
+}
+
+func (x *SubscriptionState) GetMaxLayer() uint32 {
+	if x != nil {
+		return x.MaxLayer
+	}
+	return 0
+}
+
+func (x *SubscriptionState) GetPaused() bool {
+	if x != nil {
+		return x.Paused
+	}
+	return false
+}
+
+func (x *SubscriptionState) GetEstimateBps() uint64 {
+	if x != nil {
+		return x.EstimateBps
+	}
+	return 0
+}
+
+func (x *SubscriptionState) GetForwarding() bool {
+	if x != nil {
+		return x.Forwarding
+	}
+	return false
+}
+
+// Server → publisher: whether anyone wants a layer. Layers start inactive;
+// a publisher can stop encoding and sending inactive layers. When a layer
+// becomes active, start it with a keyframe.
+type LayerActive struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	TrackId       uint32                 `protobuf:"varint,1,opt,name=track_id,json=trackId,proto3" json:"track_id,omitempty"`
+	Layer         uint32                 `protobuf:"varint,2,opt,name=layer,proto3" json:"layer,omitempty"`
+	Active        bool                   `protobuf:"varint,3,opt,name=active,proto3" json:"active,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *LayerActive) Reset() {
+	*x = LayerActive{}
+	mi := &file_control_proto_msgTypes[22]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *LayerActive) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*LayerActive) ProtoMessage() {}
+
+func (x *LayerActive) ProtoReflect() protoreflect.Message {
+	mi := &file_control_proto_msgTypes[22]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use LayerActive.ProtoReflect.Descriptor instead.
+func (*LayerActive) Descriptor() ([]byte, []int) {
+	return file_control_proto_rawDescGZIP(), []int{22}
+}
+
+func (x *LayerActive) GetTrackId() uint32 {
+	if x != nil {
+		return x.TrackId
+	}
+	return 0
+}
+
+func (x *LayerActive) GetLayer() uint32 {
+	if x != nil {
+		return x.Layer
+	}
+	return 0
+}
+
+func (x *LayerActive) GetActive() bool {
+	if x != nil {
+		return x.Active
+	}
+	return false
+}
+
+// Client → server: a fresh token for this session (same user). Answered
+// with RefreshOK or a non-fatal Error.
+type Refresh struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Token         string                 `protobuf:"bytes,1,opt,name=token,proto3" json:"token,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *Refresh) Reset() {
+	*x = Refresh{}
+	mi := &file_control_proto_msgTypes[23]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *Refresh) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*Refresh) ProtoMessage() {}
+
+func (x *Refresh) ProtoReflect() protoreflect.Message {
+	mi := &file_control_proto_msgTypes[23]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use Refresh.ProtoReflect.Descriptor instead.
+func (*Refresh) Descriptor() ([]byte, []int) {
+	return file_control_proto_rawDescGZIP(), []int{23}
+}
+
+func (x *Refresh) GetToken() string {
+	if x != nil {
+		return x.Token
+	}
+	return ""
+}
+
+type RefreshOK struct {
+	state          protoimpl.MessageState `protogen:"open.v1"`
+	TokenExpiresAt int64                  `protobuf:"varint,1,opt,name=token_expires_at,json=tokenExpiresAt,proto3" json:"token_expires_at,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
+}
+
+func (x *RefreshOK) Reset() {
+	*x = RefreshOK{}
+	mi := &file_control_proto_msgTypes[24]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *RefreshOK) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RefreshOK) ProtoMessage() {}
+
+func (x *RefreshOK) ProtoReflect() protoreflect.Message {
+	mi := &file_control_proto_msgTypes[24]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RefreshOK.ProtoReflect.Descriptor instead.
+func (*RefreshOK) Descriptor() ([]byte, []int) {
+	return file_control_proto_rawDescGZIP(), []int{24}
+}
+
+func (x *RefreshOK) GetTokenExpiresAt() int64 {
+	if x != nil {
+		return x.TokenExpiresAt
+	}
+	return 0
+}
+
 type Ping struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Id            uint64                 `protobuf:"varint,1,opt,name=id,proto3" json:"id,omitempty"`
@@ -1675,7 +2036,7 @@ type Ping struct {
 
 func (x *Ping) Reset() {
 	*x = Ping{}
-	mi := &file_control_proto_msgTypes[21]
+	mi := &file_control_proto_msgTypes[25]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1687,7 +2048,7 @@ func (x *Ping) String() string {
 func (*Ping) ProtoMessage() {}
 
 func (x *Ping) ProtoReflect() protoreflect.Message {
-	mi := &file_control_proto_msgTypes[21]
+	mi := &file_control_proto_msgTypes[25]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1700,7 +2061,7 @@ func (x *Ping) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Ping.ProtoReflect.Descriptor instead.
 func (*Ping) Descriptor() ([]byte, []int) {
-	return file_control_proto_rawDescGZIP(), []int{21}
+	return file_control_proto_rawDescGZIP(), []int{25}
 }
 
 func (x *Ping) GetId() uint64 {
@@ -1719,7 +2080,7 @@ type Pong struct {
 
 func (x *Pong) Reset() {
 	*x = Pong{}
-	mi := &file_control_proto_msgTypes[22]
+	mi := &file_control_proto_msgTypes[26]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1731,7 +2092,7 @@ func (x *Pong) String() string {
 func (*Pong) ProtoMessage() {}
 
 func (x *Pong) ProtoReflect() protoreflect.Message {
-	mi := &file_control_proto_msgTypes[22]
+	mi := &file_control_proto_msgTypes[26]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1744,7 +2105,7 @@ func (x *Pong) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Pong.ProtoReflect.Descriptor instead.
 func (*Pong) Descriptor() ([]byte, []int) {
-	return file_control_proto_rawDescGZIP(), []int{22}
+	return file_control_proto_rawDescGZIP(), []int{26}
 }
 
 func (x *Pong) GetId() uint64 {
@@ -1758,7 +2119,8 @@ var File_control_proto protoreflect.FileDescriptor
 
 const file_control_proto_rawDesc = "" +
 	"\n" +
-	"\rcontrol.proto\x12\fquicvideo.v1\"\xda\b\n" +
+	"\rcontrol.proto\x12\fquicvideo.v1\"\xd9\n" +
+	"\n" +
 	"\x0eControlMessage\x12+\n" +
 	"\x05hello\x18\x01 \x01(\v2\x13.quicvideo.v1.HelloH\x00R\x05hello\x121\n" +
 	"\awelcome\x18\x02 \x01(\v2\x15.quicvideo.v1.WelcomeH\x00R\awelcome\x12+\n" +
@@ -1777,17 +2139,22 @@ const file_control_proto_rawDesc = "" +
 	"\vtrack_added\x18\x17 \x01(\v2\x18.quicvideo.v1.TrackAddedH\x00R\n" +
 	"trackAdded\x12A\n" +
 	"\rtrack_removed\x18\x18 \x01(\v2\x1a.quicvideo.v1.TrackRemovedH\x00R\ftrackRemoved\x12J\n" +
-	"\x10keyframe_request\x18\x19 \x01(\v2\x1d.quicvideo.v1.KeyframeRequestH\x00R\x0fkeyframeRequest\x127\n" +
+	"\x10keyframe_request\x18\x19 \x01(\v2\x1d.quicvideo.v1.KeyframeRequestH\x00R\x0fkeyframeRequest\x12>\n" +
+	"\flayer_active\x18\x1a \x01(\v2\x19.quicvideo.v1.LayerActiveH\x00R\vlayerActive\x127\n" +
 	"\tsubscribe\x18\x1e \x01(\v2\x17.quicvideo.v1.SubscribeH\x00R\tsubscribe\x12=\n" +
 	"\vunsubscribe\x18\x1f \x01(\v2\x19.quicvideo.v1.UnsubscribeH\x00R\vunsubscribe\x12G\n" +
-	"\x0freceiver_report\x18  \x01(\v2\x1c.quicvideo.v1.ReceiverReportH\x00R\x0ereceiverReport\x12(\n" +
+	"\x0freceiver_report\x18  \x01(\v2\x1c.quicvideo.v1.ReceiverReportH\x00R\x0ereceiverReport\x12P\n" +
+	"\x12subscription_state\x18! \x01(\v2\x1f.quicvideo.v1.SubscriptionStateH\x00R\x11subscriptionState\x121\n" +
+	"\arefresh\x18( \x01(\v2\x15.quicvideo.v1.RefreshH\x00R\arefresh\x128\n" +
+	"\n" +
+	"refresh_ok\x18) \x01(\v2\x17.quicvideo.v1.RefreshOKH\x00R\trefreshOk\x12(\n" +
 	"\x04ping\x18< \x01(\v2\x12.quicvideo.v1.PingH\x00R\x04ping\x12(\n" +
 	"\x04pong\x18= \x01(\v2\x12.quicvideo.v1.PongH\x00R\x04pongB\x05\n" +
 	"\x03msg\"h\n" +
 	"\x05Hello\x12\x14\n" +
 	"\x05token\x18\x01 \x01(\tR\x05token\x12%\n" +
 	"\x0eclient_version\x18\x02 \x01(\tR\rclientVersion\x12\"\n" +
-	"\fcapabilities\x18\x03 \x03(\tR\fcapabilities\"\xdc\x01\n" +
+	"\fcapabilities\x18\x03 \x03(\tR\fcapabilities\"\x86\x02\n" +
 	"\aWelcome\x12\x1d\n" +
 	"\n" +
 	"session_id\x18\x01 \x01(\rR\tsessionId\x12$\n" +
@@ -1797,7 +2164,8 @@ const file_control_proto_rawDesc = "" +
 	"\n" +
 	"max_layers\x18\x04 \x01(\rR\tmaxLayers\x12*\n" +
 	"\x11max_track_bitrate\x18\x05 \x01(\x04R\x0fmaxTrackBitrate\x12\"\n" +
-	"\fcapabilities\x18\x06 \x03(\tR\fcapabilities\"\xbf\x02\n" +
+	"\fcapabilities\x18\x06 \x03(\tR\fcapabilities\x12(\n" +
+	"\x10token_expires_at\x18\a \x01(\x03R\x0etokenExpiresAt\"\xbf\x02\n" +
 	"\x05Error\x12,\n" +
 	"\x04code\x18\x01 \x01(\x0e2\x18.quicvideo.v1.Error.CodeR\x04code\x12\x18\n" +
 	"\amessage\x18\x02 \x01(\tR\amessage\x12\x14\n" +
@@ -1875,14 +2243,38 @@ const file_control_proto_rawDesc = "" +
 	"\x05layer\x18\x02 \x01(\rR\x05layer\x12\x1a\n" +
 	"\bpriority\x18\x03 \x01(\rR\bpriority\"(\n" +
 	"\vUnsubscribe\x12\x19\n" +
-	"\btrack_id\x18\x01 \x01(\rR\atrackId\"\xb3\x01\n" +
+	"\btrack_id\x18\x01 \x01(\rR\atrackId\"\xb5\x02\n" +
 	"\x0eReceiverReport\x12\x19\n" +
 	"\btrack_id\x18\x01 \x01(\rR\atrackId\x12\x14\n" +
 	"\x05layer\x18\x02 \x01(\rR\x05layer\x12'\n" +
 	"\x0fframes_received\x18\x03 \x01(\rR\x0eframesReceived\x12%\n" +
 	"\x0egroups_dropped\x18\x04 \x01(\rR\rgroupsDropped\x12 \n" +
 	"\favg_delay_ms\x18\x05 \x01(\rR\n" +
-	"avgDelayMs\"\x16\n" +
+	"avgDelayMs\x12\x1f\n" +
+	"\vlate_frames\x18\x06 \x01(\rR\n" +
+	"lateFrames\x12\x19\n" +
+	"\bstall_ms\x18\a \x01(\rR\astallMs\x12#\n" +
+	"\rdecode_stalls\x18\b \x01(\rR\fdecodeStalls\x12\x1f\n" +
+	"\vinterval_ms\x18\t \x01(\rR\n" +
+	"intervalMs\"\xdf\x01\n" +
+	"\x11SubscriptionState\x12\x19\n" +
+	"\btrack_id\x18\x01 \x01(\rR\atrackId\x12\x14\n" +
+	"\x05layer\x18\x02 \x01(\rR\x05layer\x12!\n" +
+	"\ftarget_layer\x18\x03 \x01(\rR\vtargetLayer\x12\x1b\n" +
+	"\tmax_layer\x18\x04 \x01(\rR\bmaxLayer\x12\x16\n" +
+	"\x06paused\x18\x05 \x01(\bR\x06paused\x12!\n" +
+	"\festimate_bps\x18\x06 \x01(\x04R\vestimateBps\x12\x1e\n" +
+	"\n" +
+	"forwarding\x18\a \x01(\bR\n" +
+	"forwarding\"V\n" +
+	"\vLayerActive\x12\x19\n" +
+	"\btrack_id\x18\x01 \x01(\rR\atrackId\x12\x14\n" +
+	"\x05layer\x18\x02 \x01(\rR\x05layer\x12\x16\n" +
+	"\x06active\x18\x03 \x01(\bR\x06active\"\x1f\n" +
+	"\aRefresh\x12\x14\n" +
+	"\x05token\x18\x01 \x01(\tR\x05token\"5\n" +
+	"\tRefreshOK\x12(\n" +
+	"\x10token_expires_at\x18\x01 \x01(\x03R\x0etokenExpiresAt\"\x16\n" +
 	"\x04Ping\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\x04R\x02id\"\x16\n" +
 	"\x04Pong\x12\x0e\n" +
@@ -1907,7 +2299,7 @@ func file_control_proto_rawDescGZIP() []byte {
 }
 
 var file_control_proto_enumTypes = make([]protoimpl.EnumInfo, 2)
-var file_control_proto_msgTypes = make([]protoimpl.MessageInfo, 23)
+var file_control_proto_msgTypes = make([]protoimpl.MessageInfo, 27)
 var file_control_proto_goTypes = []any{
 	(TrackKind)(0),            // 0: quicvideo.v1.TrackKind
 	(Error_Code)(0),           // 1: quicvideo.v1.Error.Code
@@ -1932,8 +2324,12 @@ var file_control_proto_goTypes = []any{
 	(*Subscribe)(nil),         // 20: quicvideo.v1.Subscribe
 	(*Unsubscribe)(nil),       // 21: quicvideo.v1.Unsubscribe
 	(*ReceiverReport)(nil),    // 22: quicvideo.v1.ReceiverReport
-	(*Ping)(nil),              // 23: quicvideo.v1.Ping
-	(*Pong)(nil),              // 24: quicvideo.v1.Pong
+	(*SubscriptionState)(nil), // 23: quicvideo.v1.SubscriptionState
+	(*LayerActive)(nil),       // 24: quicvideo.v1.LayerActive
+	(*Refresh)(nil),           // 25: quicvideo.v1.Refresh
+	(*RefreshOK)(nil),         // 26: quicvideo.v1.RefreshOK
+	(*Ping)(nil),              // 27: quicvideo.v1.Ping
+	(*Pong)(nil),              // 28: quicvideo.v1.Pong
 }
 var file_control_proto_depIdxs = []int32{
 	3,  // 0: quicvideo.v1.ControlMessage.hello:type_name -> quicvideo.v1.Hello
@@ -1950,25 +2346,29 @@ var file_control_proto_depIdxs = []int32{
 	17, // 11: quicvideo.v1.ControlMessage.track_added:type_name -> quicvideo.v1.TrackAdded
 	18, // 12: quicvideo.v1.ControlMessage.track_removed:type_name -> quicvideo.v1.TrackRemoved
 	19, // 13: quicvideo.v1.ControlMessage.keyframe_request:type_name -> quicvideo.v1.KeyframeRequest
-	20, // 14: quicvideo.v1.ControlMessage.subscribe:type_name -> quicvideo.v1.Subscribe
-	21, // 15: quicvideo.v1.ControlMessage.unsubscribe:type_name -> quicvideo.v1.Unsubscribe
-	22, // 16: quicvideo.v1.ControlMessage.receiver_report:type_name -> quicvideo.v1.ReceiverReport
-	23, // 17: quicvideo.v1.ControlMessage.ping:type_name -> quicvideo.v1.Ping
-	24, // 18: quicvideo.v1.ControlMessage.pong:type_name -> quicvideo.v1.Pong
-	1,  // 19: quicvideo.v1.Error.code:type_name -> quicvideo.v1.Error.Code
-	0,  // 20: quicvideo.v1.Track.kind:type_name -> quicvideo.v1.TrackKind
-	9,  // 21: quicvideo.v1.Track.layers:type_name -> quicvideo.v1.Layer
-	8,  // 22: quicvideo.v1.RoomState.participants:type_name -> quicvideo.v1.Participant
-	10, // 23: quicvideo.v1.RoomState.tracks:type_name -> quicvideo.v1.Track
-	8,  // 24: quicvideo.v1.ParticipantJoined.participant:type_name -> quicvideo.v1.Participant
-	0,  // 25: quicvideo.v1.Publish.kind:type_name -> quicvideo.v1.TrackKind
-	9,  // 26: quicvideo.v1.Publish.layers:type_name -> quicvideo.v1.Layer
-	10, // 27: quicvideo.v1.TrackAdded.track:type_name -> quicvideo.v1.Track
-	28, // [28:28] is the sub-list for method output_type
-	28, // [28:28] is the sub-list for method input_type
-	28, // [28:28] is the sub-list for extension type_name
-	28, // [28:28] is the sub-list for extension extendee
-	0,  // [0:28] is the sub-list for field type_name
+	24, // 14: quicvideo.v1.ControlMessage.layer_active:type_name -> quicvideo.v1.LayerActive
+	20, // 15: quicvideo.v1.ControlMessage.subscribe:type_name -> quicvideo.v1.Subscribe
+	21, // 16: quicvideo.v1.ControlMessage.unsubscribe:type_name -> quicvideo.v1.Unsubscribe
+	22, // 17: quicvideo.v1.ControlMessage.receiver_report:type_name -> quicvideo.v1.ReceiverReport
+	23, // 18: quicvideo.v1.ControlMessage.subscription_state:type_name -> quicvideo.v1.SubscriptionState
+	25, // 19: quicvideo.v1.ControlMessage.refresh:type_name -> quicvideo.v1.Refresh
+	26, // 20: quicvideo.v1.ControlMessage.refresh_ok:type_name -> quicvideo.v1.RefreshOK
+	27, // 21: quicvideo.v1.ControlMessage.ping:type_name -> quicvideo.v1.Ping
+	28, // 22: quicvideo.v1.ControlMessage.pong:type_name -> quicvideo.v1.Pong
+	1,  // 23: quicvideo.v1.Error.code:type_name -> quicvideo.v1.Error.Code
+	0,  // 24: quicvideo.v1.Track.kind:type_name -> quicvideo.v1.TrackKind
+	9,  // 25: quicvideo.v1.Track.layers:type_name -> quicvideo.v1.Layer
+	8,  // 26: quicvideo.v1.RoomState.participants:type_name -> quicvideo.v1.Participant
+	10, // 27: quicvideo.v1.RoomState.tracks:type_name -> quicvideo.v1.Track
+	8,  // 28: quicvideo.v1.ParticipantJoined.participant:type_name -> quicvideo.v1.Participant
+	0,  // 29: quicvideo.v1.Publish.kind:type_name -> quicvideo.v1.TrackKind
+	9,  // 30: quicvideo.v1.Publish.layers:type_name -> quicvideo.v1.Layer
+	10, // 31: quicvideo.v1.TrackAdded.track:type_name -> quicvideo.v1.Track
+	32, // [32:32] is the sub-list for method output_type
+	32, // [32:32] is the sub-list for method input_type
+	32, // [32:32] is the sub-list for extension type_name
+	32, // [32:32] is the sub-list for extension extendee
+	0,  // [0:32] is the sub-list for field type_name
 }
 
 func init() { file_control_proto_init() }
@@ -1991,9 +2391,13 @@ func file_control_proto_init() {
 		(*ControlMessage_TrackAdded)(nil),
 		(*ControlMessage_TrackRemoved)(nil),
 		(*ControlMessage_KeyframeRequest)(nil),
+		(*ControlMessage_LayerActive)(nil),
 		(*ControlMessage_Subscribe)(nil),
 		(*ControlMessage_Unsubscribe)(nil),
 		(*ControlMessage_ReceiverReport)(nil),
+		(*ControlMessage_SubscriptionState)(nil),
+		(*ControlMessage_Refresh)(nil),
+		(*ControlMessage_RefreshOk)(nil),
 		(*ControlMessage_Ping)(nil),
 		(*ControlMessage_Pong)(nil),
 	}
@@ -2003,7 +2407,7 @@ func file_control_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_control_proto_rawDesc), len(file_control_proto_rawDesc)),
 			NumEnums:      2,
-			NumMessages:   23,
+			NumMessages:   27,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

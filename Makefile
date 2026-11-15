@@ -1,4 +1,4 @@
-.PHONY: setup generate proto test vet run pub pub-h264 sub loadtest testdata docker
+.PHONY: setup generate proto test vet run pub pub-h264 sub loadtest testdata docker netem
 
 setup:
 	go mod download
@@ -68,3 +68,7 @@ testdata/l2.h264:
 
 docker:
 	docker build -t quicvideod:dev .
+
+# Bad-network scenarios in Docker (tc netem/tbf); results in netem/results/results.md
+netem:
+	netem/run.sh

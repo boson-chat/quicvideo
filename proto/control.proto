@@ -29,11 +29,17 @@ message ControlMessage {
     TrackAdded track_added = 23;
     TrackRemoved track_removed = 24;
     KeyframeRequest keyframe_request = 25;
+    LayerActive layer_active = 26;
 
     // subscribing
     Subscribe subscribe = 30;
     Unsubscribe unsubscribe = 31;
     ReceiverReport receiver_report = 32;
+    SubscriptionState subscription_state = 33;
+
+    // session
+    Refresh refresh = 40;
+    RefreshOK refresh_ok = 41;
 
     Ping ping = 60;
     Pong pong = 61;
@@ -53,6 +59,10 @@ message Welcome {
   uint32 max_layers = 4;           // per track
   uint64 max_track_bitrate = 5;    // bits/s, sum of a track's layers
   repeated string capabilities = 6;
+  // When the token expires (Unix seconds, 0 = never). Send Refresh before
+  // then; after it the server warns (Error TOKEN_EXPIRED, not fatal) and
+  // closes the session after a short grace period.
+  int64 token_expires_at = 7;
 }
 
 message Error {
@@ -141,11 +151,14 @@ message KeyframeRequest {
   uint32 layer = 2;
 }
 
-// Set (or replace) the subscription to a track. The switch to a new layer
-// happens at that layer's next group start.
+// Set (or replace) the subscription to a track. `layer` is the HIGHEST
+// layer the client wants (e.g. what fits its tile); the server picks the
+// layer it actually forwards from its bandwidth estimate for this client
+// and reports it in SubscriptionState. Layer switches happen at group
+// starts.
 message Subscribe {
   uint32 track_id = 1;
-  uint32 layer = 2;
+  uint32 layer = 2;          // max layer
   // 0 = server default (screen 1, camera 4). 1..7 = QUIC stream urgency,
   // lower is more important.
   uint32 priority = 3;
@@ -153,14 +166,47 @@ message Subscribe {
 
 message Unsubscribe { uint32 track_id = 1; }
 
-// Placeholder for phase 2 rate control.
+// Client → server, about once a second per subscribed track, covering the
+// time since the previous report. Delays are relative: arrival minus
+// capture time, minus the smallest such value seen recently, so clock
+// offsets between machines cancel out.
 message ReceiverReport {
   uint32 track_id = 1;
   uint32 layer = 2;
   uint32 frames_received = 3;
-  uint32 groups_dropped = 4;
-  uint32 avg_delay_ms = 5;
+  uint32 groups_dropped = 4;     // groups cut short (reset)
+  uint32 avg_delay_ms = 5;       // mean relative delay
+  uint32 late_frames = 6;        // relative delay over 150 ms
+  uint32 stall_ms = 7;           // time with no frames beyond ~3 frame intervals
+  uint32 decode_stalls = 8;      // reported by the app (decoder starved/errors)
+  uint32 interval_ms = 9;        // period this report covers
 }
+
+// Server → subscriber: what it is getting for a track. Sent when any
+// field changes.
+message SubscriptionState {
+  uint32 track_id = 1;
+  uint32 layer = 2;          // layer being forwarded now
+  uint32 target_layer = 3;   // layer the server is switching to (== layer when settled)
+  uint32 max_layer = 4;      // from Subscribe
+  bool paused = 5;           // not enough bandwidth for even the lowest layer
+  uint64 estimate_bps = 6;   // server's bandwidth estimate for this client
+  bool forwarding = 7;       // false until the first group of `layer` has gone out
+}
+
+// Server → publisher: whether anyone wants a layer. Layers start inactive;
+// a publisher can stop encoding and sending inactive layers. When a layer
+// becomes active, start it with a keyframe.
+message LayerActive {
+  uint32 track_id = 1;
+  uint32 layer = 2;
+  bool active = 3;
+}
+
+// Client → server: a fresh token for this session (same user). Answered
+// with RefreshOK or a non-fatal Error.
+message Refresh { string token = 1; }
+message RefreshOK { int64 token_expires_at = 1; }
 
 message Ping { uint64 id = 1; }
 message Pong { uint64 id = 1; }

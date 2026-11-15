@@ -160,6 +160,10 @@ func newEnv(t *testing.T, opts Options, gated bool) *env {
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 	opts.Metrics = metrics.Nop()
+	opts.NoLoop = true
+	if opts.InitialBitrate == 0 {
+		opts.InitialBitrate = 1e9 // mechanics tests: the controller never limits
+	}
 	r := New(ctx, opts)
 	e := &env{t: t, r: r, m: opts.Metrics, pubP: newPeer(1), subP: newPeer(2), cancel: cancel}
 	e.subP.gated = gated
@@ -312,7 +316,7 @@ func TestNoCacheRequestsKeyframeRateLimited(t *testing.T) {
 	e.subP.noWriter(t)
 }
 
-func TestLayerSwitchAtGroupStart(t *testing.T) {
+func TestUpSwitchWaitsForNextKeyframe(t *testing.T) {
 	e := newEnv(t, Options{}, false)
 	must(t, e.sub.Subscribe(e.track, 0, 0))
 	in0 := e.open(0, 1)
@@ -320,24 +324,47 @@ func TestLayerSwitchAtGroupStart(t *testing.T) {
 	must(t, in0.Frame(frame(true, 50, 'A')))
 	must(t, in1.Frame(frame(true, 50, '1')))
 	w0 := e.subP.nextWriter(t)
+	before := e.pubP.keyframeRequests()
 
-	must(t, e.sub.Subscribe(e.track, 1, 0)) // cache of layer 1 group 1 → switch now
-	w1 := e.subP.nextWriter(t)
-	must(t, in1.Frame(frame(false, 5, '2')))
-	must(t, in0.Frame(frame(false, 5, 'B'))) // old layer: no longer forwarded
+	// Up to layer 1: no replay of its cached group (a burst while probing);
+	// switch at its next keyframe, which the relay asks for.
+	must(t, e.sub.Subscribe(e.track, 1, 0))
+	if e.pubP.keyframeRequests() != before+1 {
+		t.Fatal("up-switch should request a keyframe (unknown GOP)")
+	}
+	e.subP.noWriter(t)
+	must(t, in1.Frame(frame(false, 5, '2'))) // mid-group: not forwarded
+	must(t, in0.Frame(frame(false, 5, 'B'))) // still on layer 0 meanwhile
 	in0.End(false)
 	in1.End(false)
-
 	_, fs0, _ := read(t, w0)
-	h1, fs1, _ := read(t, w1)
-	if string(tags(fs0)) != "A" {
-		t.Fatalf("layer 0 got %q", tags(fs0))
-	}
-	if h1.Layer != 1 || string(tags(fs1)) != "12" {
-		t.Fatalf("layer 1 got layer %d %q", h1.Layer, tags(fs1))
+	e.group(1, 2, frame(true, 50, '3'), frame(false, 5, '4'))
+	h1, fs1, _ := read(t, e.subP.nextWriter(t))
+	if string(tags(fs0)) != "AB" || h1.Layer != 1 || h1.Group != 2 || string(tags(fs1)) != "34" {
+		t.Fatalf("layer 0 %q, then layer %d group %d %q", tags(fs0), h1.Layer, h1.Group, tags(fs1))
 	}
 	if l, ok := e.sub.subs[e.track].Layer(); !ok || l != 1 {
 		t.Fatalf("active layer %d %v", l, ok)
+	}
+}
+
+func TestDownSwitchReplaysCache(t *testing.T) {
+	e := newEnv(t, Options{}, false)
+	must(t, e.sub.Subscribe(e.track, 1, 0))
+	in0 := e.open(0, 1)
+	in1 := e.open(1, 1)
+	must(t, in0.Frame(frame(true, 50, 'a')))
+	must(t, in1.Frame(frame(true, 50, 'H')))
+	w1 := e.subP.nextWriter(t)
+	_ = w1
+	// Down (the client lowered its max): immediate, from layer 0's cache.
+	must(t, e.sub.Subscribe(e.track, 0, 0))
+	w0 := e.subP.nextWriter(t)
+	must(t, in0.Frame(frame(false, 5, 'b')))
+	in0.End(false)
+	h, fs, _ := read(t, w0)
+	if h.Layer != 0 || string(tags(fs)) != "ab" {
+		t.Fatalf("got layer %d %q", h.Layer, tags(fs))
 	}
 }
 

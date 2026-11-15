@@ -1,0 +1,53 @@
+# Bad-network harness: `make netem`. The viewer's downlink is shaped on the
+# server's viewnet interface (server → viewer); the camera publisher's
+# uplink on its own interface.
+name: quicvideo-netem
+
+x-node: &node
+  image: quicvideo-netem
+  cap_add: [NET_ADMIN]
+  init: true
+
+networks:
+  pubnet:
+    ipam: {config: [{subnet: 10.77.1.0/24}]}
+  viewnet:
+    ipam: {config: [{subnet: 10.77.2.0/24}]}
+
+services:
+  server:
+    <<: *node
+    build: {context: .., dockerfile: netem/Dockerfile}
+    command: ["quicvideod", "serve"]
+    environment:
+      AUTH_INSECURE: "true"
+      TRACE_CONTROLLER: "true"
+      ENV: production
+      PUBLIC_HTTP_ADDR: ""
+    networks:
+      pubnet: {ipv4_address: 10.77.1.10}
+      viewnet: {ipv4_address: 10.77.2.10}
+
+  pub-cam:
+    <<: *node
+    depends_on: [server]
+    command: ["pub", "-addr", "10.77.1.10:7710", "-insecure", "-token", "cam", "-room", "call",
+              "-kind", "camera", "-gop", "2s",
+              "-layers", "320x180@15:150k,640x360@30:500k,1280x720@30:1200k"]
+    networks: [pubnet]
+
+  pub-screen:
+    <<: *node
+    depends_on: [server]
+    command: ["pub", "-addr", "10.77.1.10:7710", "-insecure", "-token", "screen", "-room", "call",
+              "-kind", "screen", "-gop", "4s",
+              "-layers", "1280x720@5:300k,1920x1080@15:2000k"]
+    networks: [pubnet]
+
+  viewer:
+    <<: *node
+    command: ["sleep", "infinity"]
+    networks:
+      viewnet: {ipv4_address: 10.77.2.20}
+    volumes:
+      - ./results:/results

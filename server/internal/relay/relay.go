@@ -10,6 +10,7 @@ import (
 	"context"
 	"errors"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/boson-chat/quicvideo/gen/controlpb"
@@ -59,7 +60,29 @@ type Options struct {
 	GroupCacheBytes         int
 	SubQueueBytes           int
 	KeyframeRequestInterval time.Duration
-	Metrics                 *metrics.Metrics
+
+	// Bandwidth control (see controller.go). Zero = defaults.
+	ControlInterval  time.Duration // 250ms
+	InitialBitrate   float64       // 2.5 Mbps: a new subscriber's estimate
+	MinBitrate       float64       // 150 kbps
+	MaxEstimate      float64       // 100 Mbps
+	BacklogDown      time.Duration // 150ms
+	BacklogTicks     int           // 3: consecutive ticks over BacklogDown that count as congestion
+	QueueDelayDown   time.Duration // 250ms of RTT above the minimum
+	DownCooldown     time.Duration // 1s
+	UpHold           time.Duration // 6s stable before probing up
+	StartupHold      time.Duration // 2s until the first congestion
+	MaxHold          time.Duration // 40s after repeated failed probes
+	ProbeWindow      time.Duration // 3s for a probe to count as held
+	LongGOP          time.Duration // 1s: up-switches ask for a keyframe beyond this
+	ReplayMaxAge     time.Duration // 1s: on a switch, replay a cached group only if it started this recently
+	LayerIdleTimeout time.Duration // 2s with nobody before LayerActive(false)
+	// NoLoop: don't start the control loop (tests drive Tick themselves).
+	NoLoop bool
+	// Trace, if set, gets one line per controller decision (debugging).
+	Trace func(session uint32, msg string)
+
+	Metrics *metrics.Metrics
 	// Now is the clock (tests). Default time.Now.
 	Now func() time.Time
 }
@@ -89,6 +112,34 @@ func (o *Options) defaults() {
 	if o.KeyframeRequestInterval <= 0 {
 		o.KeyframeRequestInterval = time.Second
 	}
+	def := func(d *time.Duration, v time.Duration) {
+		if *d <= 0 {
+			*d = v
+		}
+	}
+	def(&o.ControlInterval, 250*time.Millisecond)
+	def(&o.BacklogDown, 150*time.Millisecond)
+	if o.BacklogTicks <= 0 {
+		o.BacklogTicks = 3
+	}
+	def(&o.QueueDelayDown, 250*time.Millisecond)
+	def(&o.DownCooldown, time.Second)
+	def(&o.UpHold, 6*time.Second)
+	def(&o.StartupHold, 2*time.Second)
+	def(&o.MaxHold, 40*time.Second)
+	def(&o.ProbeWindow, 3*time.Second)
+	def(&o.LongGOP, time.Second)
+	def(&o.ReplayMaxAge, time.Second)
+	def(&o.LayerIdleTimeout, 2*time.Second)
+	if o.InitialBitrate <= 0 {
+		o.InitialBitrate = 2_500_000
+	}
+	if o.MinBitrate <= 0 {
+		o.MinBitrate = 150_000
+	}
+	if o.MaxEstimate <= 0 {
+		o.MaxEstimate = 100_000_000
+	}
 	if o.Metrics == nil {
 		o.Metrics = metrics.Nop()
 	}
@@ -112,7 +163,11 @@ type Relay struct {
 // New creates a relay. Forwarders stop when ctx is cancelled.
 func New(ctx context.Context, opts Options) *Relay {
 	opts.defaults()
-	return &Relay{opts: opts, m: opts.Metrics, ctx: ctx, rooms: map[string]*room{}, tracks: map[uint32]*Track{}}
+	r := &Relay{opts: opts, m: opts.Metrics, ctx: ctx, rooms: map[string]*room{}, tracks: map[uint32]*Track{}}
+	if !opts.NoLoop {
+		go r.loop(ctx)
+	}
+	return r
 }
 
 type room struct {
@@ -145,9 +200,23 @@ type Member struct {
 
 	tracks map[uint32]*Track
 	subs   map[uint32]*Subscription // by track id
+
+	ctrl     *controller  // bandwidth estimate as a subscriber (Relay.mu)
+	bytesOut atomic.Int64 // bytes written by this member's forwarders
+	cuts     atomic.Int64 // same-layer group cuts (congestion)
 }
 
 func (m *Member) Peer() Peer { return m.peer }
+
+// Room is the member's room name ("" after Leave).
+func (m *Member) Room() string {
+	m.r.mu.Lock()
+	defer m.r.mu.Unlock()
+	if m.room == nil {
+		return ""
+	}
+	return m.room.name
+}
 
 func (m *Member) participant() *controlpb.Participant {
 	return &controlpb.Participant{SessionId: m.peer.ID(), UserId: m.info.UserID, DisplayName: m.info.DisplayName}
@@ -174,7 +243,8 @@ func (r *Relay) Join(peer Peer, info Participant, roomName string) (*Member, *co
 		}
 		return nil, nil, ErrRoomFull
 	}
-	mem := &Member{r: r, peer: peer, info: info, room: rm, tracks: map[uint32]*Track{}, subs: map[uint32]*Subscription{}}
+	mem := &Member{r: r, peer: peer, info: info, room: rm, tracks: map[uint32]*Track{}, subs: map[uint32]*Subscription{},
+		ctrl: newController(&r.opts, r.opts.Now())}
 	state := &controlpb.RoomState{Room: roomName, YourSessionId: peer.ID()}
 	for _, o := range rm.members {
 		state.Participants = append(state.Participants, o.participant())
@@ -261,6 +331,10 @@ func (m *Member) Publish(req *controlpb.Publish) (uint32, error) {
 	m.room.tracks[t.id] = t
 	r.tracks[t.id] = t
 	r.m.TrackAdded(t.screen())
+	// The publisher hears PublishOK before anyone can subscribe (and send it
+	// LayerActive / KeyframeRequest for the new track).
+	m.peer.SendControl(&controlpb.ControlMessage{Msg: &controlpb.ControlMessage_PublishOk{
+		PublishOk: &controlpb.PublishOK{ClientRef: req.GetClientRef(), TrackId: t.id}}})
 	m.room.broadcast(&controlpb.ControlMessage{Msg: &controlpb.ControlMessage_TrackAdded{
 		TrackAdded: &controlpb.TrackAdded{Track: t.proto()}}}, m.peer.ID())
 	return t.id, nil
@@ -315,8 +389,7 @@ func (m *Member) Subscribe(trackID, layer, priority uint32) error {
 	if t.owner == m {
 		return ErrBadRequest
 	}
-	ls := t.layers[layer]
-	if ls == nil {
+	if t.layers[layer] == nil {
 		return ErrBadRequest
 	}
 	urgency := t.defaultUrgency()
@@ -331,9 +404,13 @@ func (m *Member) Subscribe(trackID, layer, priority uint32) error {
 		r.m.SubscriptionAdded()
 		go sub.forward(r.ctx)
 	}
-	if sub.setTarget(layer, urgency) {
-		ls.addSub(sub)
-	}
+	sub.mu.Lock()
+	sub.maxLayer, sub.urgency = layer, urgency
+	sub.mu.Unlock()
+	// The controller picks the layer actually forwarded (≤ max).
+	m.reallocate()
+	m.sendStates()
+	t.updateActivity(r.opts.Now())
 	return nil
 }
 
@@ -345,6 +422,7 @@ func (m *Member) Unsubscribe(trackID uint32) error {
 		return ErrTrackNotFound
 	}
 	m.unsubscribeLocked(trackID)
+	m.reallocate() // the freed budget goes to the others
 	return nil
 }
 

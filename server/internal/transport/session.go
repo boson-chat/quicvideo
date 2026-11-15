@@ -25,15 +25,17 @@ type session struct {
 	conn *quic.Conn
 	id   uint32
 
-	ident *auth.Identity
-	out   chan *controlpb.ControlMessage
+	ident  *auth.Identity // read loop only
+	out    chan *controlpb.ControlMessage
+	expiry chan time.Time // new token expiry (Refresh) → watchExpiry
 
 	mu     sync.Mutex
 	member *relay.Member
 }
 
 func newSession(s *Server, conn *quic.Conn, id uint32) *session {
-	return &session{s: s, conn: conn, id: id, out: make(chan *controlpb.ControlMessage, controlQueue)}
+	return &session{s: s, conn: conn, id: id, out: make(chan *controlpb.ControlMessage, controlQueue),
+		expiry: make(chan time.Time, 1)}
 }
 
 // ---- relay.Peer ------------------------------------------------------------
@@ -46,6 +48,12 @@ func (ss *session) SendControl(m *controlpb.ControlMessage) {
 	default:
 		_ = ss.conn.CloseWithError(CodeSlow, "control queue full")
 	}
+}
+
+// NetStats implements relay.StatsPeer.
+func (ss *session) NetStats() relay.NetStats {
+	st := ss.conn.ConnectionStats()
+	return relay.NetStats{SmoothedRTT: st.SmoothedRTT, MinRTT: st.MinRTT, PacketsSent: st.PacketsSent, PacketsLost: st.PacketsLost}
 }
 
 type sendStream struct{ *quic.SendStream }
@@ -122,12 +130,14 @@ func (ss *session) run(ctx context.Context) error {
 		MaxTracks:       uint32(rc.MaxTracksPerSession),
 		MaxLayers:       uint32(rc.MaxLayers),
 		MaxTrackBitrate: rc.MaxTrackBitrate,
+		TokenExpiresAt:  unix(ident.ExpiresAt),
 	}}}
 
 	ctx, cancelAll := context.WithCancel(ctx)
 	defer cancelAll()
 	go ss.writeLoop(ctx, ctrl)
 	go ss.acceptMedia(ctx)
+	go ss.watchExpiry(ctx, ident.ExpiresAt)
 	defer ss.leave("disconnected")
 
 	for {
@@ -185,13 +195,11 @@ func (ss *session) handle(msg *controlpb.ControlMessage) bool {
 			ss.SendControl(errMsg(controlpb.Error_NOT_IN_ROOM, "join a room first", false, x.Publish.GetClientRef()))
 			return false
 		}
-		id, err := mem.Publish(x.Publish)
-		if err != nil {
+		// On success the relay sends PublishOK itself (before announcing the track).
+		if _, err := mem.Publish(x.Publish); err != nil {
 			ss.SendControl(errMsg(errCode(err), err.Error(), false, x.Publish.GetClientRef()))
 			return false
 		}
-		ss.SendControl(&controlpb.ControlMessage{Msg: &controlpb.ControlMessage_PublishOk{
-			PublishOk: &controlpb.PublishOK{ClientRef: x.Publish.GetClientRef(), TrackId: id}}})
 	case *controlpb.ControlMessage_Unpublish:
 		ss.withMember(func(m *relay.Member) error { return m.Unpublish(x.Unpublish.GetTrackId()) })
 	case *controlpb.ControlMessage_Subscribe:
@@ -200,7 +208,11 @@ func (ss *session) handle(msg *controlpb.ControlMessage) bool {
 	case *controlpb.ControlMessage_Unsubscribe:
 		ss.withMember(func(m *relay.Member) error { return m.Unsubscribe(x.Unsubscribe.GetTrackId()) })
 	case *controlpb.ControlMessage_ReceiverReport:
-		// Phase 2 (rate control). Accepted and ignored for now.
+		if mem := ss.current(); mem != nil {
+			mem.OnReceiverReport(x.ReceiverReport)
+		}
+	case *controlpb.ControlMessage_Refresh:
+		ss.refresh(x.Refresh.GetToken())
 	case *controlpb.ControlMessage_Ping:
 		ss.SendControl(&controlpb.ControlMessage{Msg: &controlpb.ControlMessage_Pong{Pong: &controlpb.Pong{Id: x.Ping.GetId()}}})
 	case *controlpb.ControlMessage_Hello:
@@ -321,6 +333,90 @@ func (ss *session) ingest(st *quic.ReceiveStream) {
 			return
 		}
 	}
+}
+
+// refresh swaps in a new token for the same user.
+func (ss *session) refresh(token string) {
+	id, err := ss.s.auth.Verify(context.Background(), token)
+	if err != nil {
+		code := controlpb.Error_UNAUTHENTICATED
+		if errors.Is(err, auth.ErrTokenExpired) {
+			code = controlpb.Error_TOKEN_EXPIRED
+		}
+		ss.SendControl(errMsg(code, "refresh: "+err.Error(), false, ""))
+		return
+	}
+	if id.UserID != ss.ident.UserID {
+		ss.SendControl(errMsg(controlpb.Error_FORBIDDEN, "refresh: token is for another user", false, ""))
+		return
+	}
+	ss.ident = id
+	ss.s.metrics.TokenRefreshed()
+	if mem := ss.current(); mem != nil && !id.CanJoin(mem.Room()) {
+		ss.leave("token no longer allows this room")
+		ss.SendControl(errMsg(controlpb.Error_FORBIDDEN, "new token does not allow this room", false, ""))
+	}
+	select {
+	case <-ss.expiry:
+	default:
+	}
+	ss.expiry <- id.ExpiresAt
+	ss.SendControl(&controlpb.ControlMessage{Msg: &controlpb.ControlMessage_RefreshOk{
+		RefreshOk: &controlpb.RefreshOK{TokenExpiresAt: unix(id.ExpiresAt)}}})
+}
+
+// watchExpiry warns when the token expires and closes the session after
+// TOKEN_GRACE unless a Refresh arrives.
+func (ss *session) watchExpiry(ctx context.Context, exp time.Time) {
+	grace := ss.s.cfg.AuthConfig.TokenGrace
+	var timer *time.Timer
+	var fire <-chan time.Time
+	warned := false
+	arm := func(at time.Time) {
+		if timer != nil {
+			timer.Stop()
+		}
+		fire = nil
+		if !at.IsZero() {
+			timer = time.NewTimer(time.Until(at))
+			fire = timer.C
+		}
+	}
+	arm(exp)
+	defer func() {
+		if timer != nil {
+			timer.Stop()
+		}
+	}()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case exp = <-ss.expiry:
+			warned = false
+			arm(exp)
+		case <-fire:
+			if !warned {
+				warned = true
+				ss.s.metrics.TokenExpired()
+				ss.SendControl(errMsg(controlpb.Error_TOKEN_EXPIRED,
+					"token expired: send Refresh within "+grace.String(), false, ""))
+				arm(time.Now().Add(grace))
+				continue
+			}
+			ss.SendControl(errMsg(controlpb.Error_TOKEN_EXPIRED, "token expired", true, ""))
+			// Let the error go out before closing.
+			time.AfterFunc(500*time.Millisecond, func() { _ = ss.conn.CloseWithError(CodeAuth, "token expired") })
+			return
+		}
+	}
+}
+
+func unix(t time.Time) int64 {
+	if t.IsZero() {
+		return 0
+	}
+	return t.Unix()
 }
 
 func errMsg(code controlpb.Error_Code, msg string, fatal bool, ref string) *controlpb.ControlMessage {

@@ -3,6 +3,7 @@ package relay
 import (
 	"context"
 	"sync"
+	"time"
 
 	"github.com/boson-chat/quicvideo/server/metrics"
 	"github.com/boson-chat/quicvideo/wire"
@@ -19,6 +20,7 @@ type item struct {
 	end     bool // end-of-group marker (no frame)
 	aborted bool // with end: reset instead of FIN
 	f       *wire.Frame
+	enq     time.Time
 }
 
 func (it *item) size() int {
@@ -39,7 +41,9 @@ type Subscription struct {
 
 	mu         sync.Mutex
 	urgency    int8
-	target     uint32
+	maxLayer   uint32 // from Subscribe: the best layer the client wants
+	paused     bool   // controller: not enough bandwidth for the lowest layer
+	target     uint32 // controller's choice
 	active     uint32
 	hasActive  bool
 	curKey     groupKey // group being queued; frames of other groups are dropped
@@ -52,11 +56,20 @@ type Subscription struct {
 	closed     bool
 	notify     chan struct{}
 	done       chan struct{}
+
+	sent subState // last SubscriptionState sent (guarded by Relay.mu)
+}
+
+type subState struct {
+	layer, target, max uint32
+	paused, forwarding bool
+	valid              bool
 }
 
 func newSubscription(m *Member, t *Track, urgency int8) *Subscription {
 	return &Subscription{
 		member: m, track: t, m: m.r.m, cap: m.r.opts.SubQueueBytes, urgency: urgency,
+		paused: true, // until the controller assigns a layer
 		notify: make(chan struct{}, 1), done: make(chan struct{}),
 	}
 }
@@ -67,9 +80,53 @@ func (s *Subscription) setTarget(layer uint32, urgency int8) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.urgency = urgency
-	changed := s.target != layer || !s.hasActive
-	s.target = layer
+	changed := s.target != layer || !s.hasActive || s.paused
+	s.target, s.paused = layer, false
 	return changed
+}
+
+// pause stops forwarding (not enough bandwidth). The open group is reset.
+func (s *Subscription) pause() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.paused {
+		return
+	}
+	s.paused, s.hasActive, s.hasCur = true, false, false
+	for _, it := range s.queue {
+		if it.f != nil {
+			s.m.FrameDropped(metrics.DropPaused, it.size())
+		}
+	}
+	clear(s.queue)
+	s.queue, s.queueBytes = s.queue[:0], 0
+	s.cancelWriter()
+}
+
+// state reads what the subscription is doing (for SubscriptionState and
+// the controller).
+func (s *Subscription) state() (target, active uint32, hasActive, paused bool, max uint32) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.target, s.active, s.hasActive, s.paused, s.maxLayer
+}
+
+func (s *Subscription) closedNow() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.closed
+}
+
+// backlogAge is how long the oldest queued frame has waited.
+func (s *Subscription) backlogAge(now time.Time) time.Duration {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, it := range s.queue {
+		if it.f != nil {
+			return now.Sub(it.enq)
+		}
+	}
+	return 0
 }
 
 // Layer is the layer currently being forwarded (ok=false: none yet).
@@ -92,7 +149,7 @@ func (s *Subscription) wake() {
 func (s *Subscription) deliver(layer uint32, group uint64, f *wire.Frame, first bool) (keep, needKF bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.closed {
+	if s.closed || s.paused {
 		return false, false
 	}
 	if layer != s.target && (!s.hasActive || layer != s.active) {
@@ -115,7 +172,9 @@ func (s *Subscription) deliver(layer uint32, group uint64, f *wire.Frame, first 
 
 	if first {
 		if s.hasCur && s.curKey != key {
-			s.supersede()
+			// Same layer: the subscriber fell behind (a congestion signal).
+			// Different layer: an intended switch, not congestion.
+			s.supersede(s.curKey.layer == layer)
 		}
 		s.curKey, s.hasCur, s.skipping = key, true, false
 	} else if !s.hasCur || s.curKey != key {
@@ -131,7 +190,7 @@ func (s *Subscription) deliver(layer uint32, group uint64, f *wire.Frame, first 
 		s.m.FrameDropped(metrics.DropOverflow, len(f.Payload))
 		return keep, true
 	}
-	s.queue = append(s.queue, item{key: key, first: first, f: f})
+	s.queue = append(s.queue, item{key: key, first: first, f: f, enq: s.member.r.opts.Now()})
 	s.queueBytes += len(f.Payload)
 	s.wake()
 	return keep, false
@@ -152,7 +211,7 @@ func (s *Subscription) endGroup(layer uint32, group uint64, aborted bool) {
 // supersede drops queued frames of older groups: a new group started while
 // the subscriber was still behind. The stream they belong to is reset so
 // QUIC stops (re)transmitting it. Caller holds s.mu.
-func (s *Subscription) supersede() {
+func (s *Subscription) supersede(congestion bool) {
 	// Everything queued belongs to older groups. End markers go too: the
 	// reset below, or the forwarder opening the next group, ends the old
 	// stream.
@@ -168,6 +227,9 @@ func (s *Subscription) supersede() {
 	if dropped {
 		s.m.GroupDropped(metrics.DropSuperseded)
 		s.cancelWriter()
+		if congestion {
+			s.member.cuts.Add(1)
+		}
 	}
 }
 
@@ -188,6 +250,7 @@ func (s *Subscription) dropCurrent(reason metrics.DropReason) {
 	s.queue = kept
 	s.skipping = true
 	s.m.GroupDropped(reason)
+	s.member.cuts.Add(1)
 	if s.writer != nil && s.writerKey == s.curKey {
 		s.cancelWriter()
 	}
@@ -332,5 +395,6 @@ func (s *Subscription) forward(ctx context.Context) {
 			continue
 		}
 		s.m.Egress(it.size())
+		s.member.bytesOut.Add(int64(len(hdr) + it.size()))
 	}
 }
