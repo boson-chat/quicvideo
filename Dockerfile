@@ -3,6 +3,8 @@ FROM --platform=$BUILDPLATFORM golang:1.27 AS builder
 
 WORKDIR /app
 COPY go.mod go.sum ./
+# Vendored module (go.mod replace) must be there for go mod download.
+COPY third_party/ third_party/
 RUN go mod download
 
 COPY . .

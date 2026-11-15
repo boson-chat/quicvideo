@@ -74,3 +74,32 @@ jobs:
         run: go test -v -count=1 ./client/media/
       - run: go test -count=1 ./...
       - run: go build -o viewer.exe ./examples/viewer
+
+  web:
+    # Browser client: WebTransport to quicvideod, WebCodecs H.264, in real
+    # Chromium (fake camera/screen) against a Go bot publishing real H.264.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - name: ffmpeg (test pattern H.264 for the Go bot)
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg
+      - working-directory: web
+        run: npm ci
+      - name: Built bundle is up to date
+        working-directory: web
+        run: npm run build && git diff --exit-code dist
+      - working-directory: web
+        run: npx playwright install --with-deps chromium
+      - working-directory: web
+        run: npx playwright test
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: webtransport-demo
+          path: web/test-results/webtransport-demo.png

@@ -13,7 +13,6 @@ import (
 	"github.com/boson-chat/quicvideo/server/internal/services/auth"
 	"github.com/boson-chat/quicvideo/server/metrics"
 	"github.com/boson-chat/quicvideo/wire"
-	"github.com/quic-go/quic-go"
 )
 
 // controlQueue is how many outgoing control messages may wait before the
@@ -22,7 +21,7 @@ const controlQueue = 512
 
 type session struct {
 	s    *Server
-	conn *quic.Conn
+	conn mconn
 	id   uint32
 
 	ident  *auth.Identity // read loop only
@@ -33,7 +32,7 @@ type session struct {
 	member *relay.Member
 }
 
-func newSession(s *Server, conn *quic.Conn, id uint32) *session {
+func newSession(s *Server, conn mconn, id uint32) *session {
 	return &session{s: s, conn: conn, id: id, out: make(chan *controlpb.ControlMessage, controlQueue),
 		expiry: make(chan time.Time, 1)}
 }
@@ -46,27 +45,19 @@ func (ss *session) SendControl(m *controlpb.ControlMessage) {
 	select {
 	case ss.out <- m:
 	default:
-		_ = ss.conn.CloseWithError(CodeSlow, "control queue full")
+		ss.conn.Close(CodeSlow, "control queue full")
 	}
 }
 
-// NetStats implements relay.StatsPeer.
+// NetStats implements relay.StatsPeer (zero values where the transport
+// has no stats: the controller then ignores RTT and loss).
 func (ss *session) NetStats() relay.NetStats {
-	st := ss.conn.ConnectionStats()
-	return relay.NetStats{SmoothedRTT: st.SmoothedRTT, MinRTT: st.MinRTT, PacketsSent: st.PacketsSent, PacketsLost: st.PacketsLost}
+	st, _ := ss.conn.Stats()
+	return st
 }
-
-type sendStream struct{ *quic.SendStream }
-
-func (s sendStream) CancelWrite(code uint64) { s.SendStream.CancelWrite(quic.StreamErrorCode(code)) }
 
 func (ss *session) OpenGroup(ctx context.Context, urgency int8) (relay.GroupWriter, error) {
-	st, err := ss.conn.OpenUniStreamSync(ctx)
-	if err != nil {
-		return nil, err
-	}
-	st.SetPriority(urgency, false)
-	return sendStream{st}, nil
+	return ss.conn.OpenGroup(ctx, urgency)
 }
 
 // ---- session ---------------------------------------------------------------
@@ -76,26 +67,25 @@ func (ss *session) run(ctx context.Context) error {
 	m := ss.s.metrics
 
 	actx, cancel := context.WithDeadline(ctx, ss.s.helloDeadline())
-	ctrl, err := ss.conn.AcceptStream(actx)
+	ctrl, err := ss.conn.AcceptControl(actx)
 	cancel()
 	if err != nil {
 		m.Handshake(metrics.HandshakeNoStream)
-		_ = ss.conn.CloseWithError(CodeProtocol, "no control stream")
+		ss.conn.Close(CodeProtocol, "no control stream")
 		return err
 	}
-	ctrl.SetPriority(0, false)
 	_ = ctrl.SetReadDeadline(ss.s.helloDeadline())
 	rd := wire.NewControlReader(ctrl)
 	first, err := rd.Read()
 	if err != nil {
 		m.Handshake(metrics.HandshakeNoHello)
-		_ = ss.conn.CloseWithError(CodeProtocol, "no hello")
+		ss.conn.Close(CodeProtocol, "no hello")
 		return err
 	}
 	hello := first.GetHello()
 	if hello == nil {
 		m.Handshake(metrics.HandshakeProtocol)
-		_ = ss.conn.CloseWithError(CodeProtocol, "expected hello")
+		ss.conn.Close(CodeProtocol, "expected hello")
 		return errors.New("first message is not hello")
 	}
 	ident, err := ss.s.auth.Verify(ctx, hello.GetToken())
@@ -113,7 +103,7 @@ func (ss *session) run(ctx context.Context) error {
 		case <-ss.conn.Context().Done():
 		case <-time.After(time.Second):
 		}
-		_ = ss.conn.CloseWithError(CodeAuth, "unauthenticated")
+		ss.conn.Close(CodeAuth, "unauthenticated")
 		return err
 	}
 	_ = ctrl.SetReadDeadline(time.Time{})
@@ -146,13 +136,13 @@ func (ss *session) run(ctx context.Context) error {
 			return err
 		}
 		if fatal := ss.handle(msg); fatal {
-			_ = ss.conn.CloseWithError(CodeProtocol, "protocol error")
+			ss.conn.Close(CodeProtocol, "protocol error")
 			return errors.New("protocol error")
 		}
 	}
 }
 
-func (ss *session) writeLoop(ctx context.Context, ctrl *quic.Stream) {
+func (ss *session) writeLoop(ctx context.Context, ctrl ctrlStream) {
 	var buf []byte
 	for {
 		select {
@@ -175,7 +165,7 @@ func (ss *session) writeLoop(ctx context.Context, ctrl *quic.Stream) {
 				}
 			}
 			if _, err := ctrl.Write(buf); err != nil {
-				_ = ss.conn.CloseWithError(CodeProtocol, "control write failed")
+				ss.conn.Close(CodeProtocol, "control write failed")
 				return
 			}
 		}
@@ -275,7 +265,7 @@ func (ss *session) leave(reason string) {
 // acceptMedia takes the client's media streams (one per group it publishes).
 func (ss *session) acceptMedia(ctx context.Context) {
 	for {
-		st, err := ss.conn.AcceptUniStream(ctx)
+		st, err := ss.conn.AcceptGroup(ctx)
 		if err != nil {
 			return
 		}
@@ -283,7 +273,7 @@ func (ss *session) acceptMedia(ctx context.Context) {
 	}
 }
 
-func (ss *session) ingest(st *quic.ReceiveStream) {
+func (ss *session) ingest(st groupStream) {
 	m := ss.s.metrics
 	mem := ss.current()
 	if mem == nil {
@@ -301,7 +291,7 @@ func (ss *session) ingest(st *quic.ReceiveStream) {
 		if errors.Is(err, relay.ErrStale) {
 			code = wire.StreamCodeStale
 		}
-		st.CancelRead(quic.StreamErrorCode(code))
+		st.CancelRead(uint64(code))
 		return
 	}
 	for {
@@ -311,8 +301,7 @@ func (ss *session) ingest(st *quic.ReceiveStream) {
 				in.End(false)
 				return
 			}
-			var se *quic.StreamError
-			if !errors.As(err, &se) {
+			if !isReset(err) {
 				st.CancelRead(wire.StreamCodeProtocol)
 			}
 			in.End(true)
@@ -328,7 +317,7 @@ func (ss *session) ingest(st *quic.ReceiveStream) {
 			case errors.Is(err, relay.ErrRateLimited):
 				m.GroupDropped(metrics.DropRateLimit)
 			}
-			st.CancelRead(quic.StreamErrorCode(code))
+			st.CancelRead(uint64(code))
 			in.End(true)
 			return
 		}
@@ -406,7 +395,7 @@ func (ss *session) watchExpiry(ctx context.Context, exp time.Time) {
 			}
 			ss.SendControl(errMsg(controlpb.Error_TOKEN_EXPIRED, "token expired", true, ""))
 			// Let the error go out before closing.
-			time.AfterFunc(500*time.Millisecond, func() { _ = ss.conn.CloseWithError(CodeAuth, "token expired") })
+			time.AfterFunc(500*time.Millisecond, func() { ss.conn.Close(CodeAuth, "token expired") })
 			return
 		}
 	}

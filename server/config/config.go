@@ -51,6 +51,9 @@ type QUICConfig struct {
 	// hundreds of KB), so these are well above quic-go's defaults.
 	MaxStreamReceiveWindow     uint64 `default:"8388608" env:"QUIC_MAX_STREAM_WINDOW"`
 	MaxConnectionReceiveWindow uint64 `default:"33554432" env:"QUIC_MAX_CONN_WINDOW"`
+	// Origins allowed to open WebTransport sessions (comma-separated, "*" =
+	// any). Sessions also need a token.
+	WebTransportOrigins string `default:"*" env:"WEBTRANSPORT_ORIGINS"`
 	// Concurrent incoming uni streams (media groups) per connection.
 	MaxIncomingUniStreams int64 `default:"256" env:"QUIC_MAX_UNI_STREAMS"`
 }

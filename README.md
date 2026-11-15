@@ -68,6 +68,39 @@ The UI is [Gio](https://gioui.org): the same viewer runs on macOS and Linux toda
 - **Started from a terminal:** both permissions belong to the **terminal app**, not the binary.
 - **Errors:** missing permissions come back as `*media.PermissionError` (`errors.Is(err, media.ErrScreenPermission / ErrCameraPermission)`) with these instructions.
 
+## Browsers (WebTransport + WebCodecs)
+
+quicvideod also speaks the protocol to browsers. The same UDP port accepts HTTP/3, and **`https://host:7710/wt`** opens a WebTransport session that carries exactly the native streams:
+- one bidirectional control stream (the same protobuf messages);
+- one unidirectional stream per group of pictures, both ways.
+
+Auth, rooms, bandwidth control and layer activity are the same as for native clients.
+
+`web/` is the TypeScript client (`src/client.ts`) and a demo page, served by quicvideod at **`http://host:8090/web/`**:
+- encode/decode with WebCodecs (H.264 Annex-B);
+- capture with `getUserMedia` / `getDisplayMedia`;
+- only the layers someone watches are encoded;
+- a grid with a pinned tile, with subscriptions sized to each tile.
+
+With the self-signed dev certificate, the page gets the certificate's hash from `/v1/info` and passes it as `serverCertificateHashes`. That only works for ECDSA certificates valid ≤ 14 days, so the dev cert is valid for 13 days. In production, use a real certificate.
+
+```sh
+make run                                  # then open http://localhost:8090/web/?token=alice
+make web-test                             # Playwright: two Chromium pages + a Go bot
+```
+
+Browser support (Nov 2026):
+
+| | WebTransport | WebCodecs (video) | Notes |
+|---|---|---|---|
+| Chrome / Edge | 97+ | 94+ | tested (Playwright, Chromium) |
+| Firefox | 114+ | 130+ (desktop) | untested; no `MediaStreamTrackProcessor`, so capture falls back to drawing a `<video>` |
+| Safari | 26.4+ (macOS, iOS) | 16.4+ | untested; H.264 encode via VideoToolbox |
+
+`WEBTRANSPORT_ORIGINS` limits which page origins may open sessions (default `*`; sessions need a token either way). WebTransport sessions have no QUIC RTT/loss stats in the bandwidth controller, which then relies on send backlog, cuts and receiver reports.
+
+quicvideo vendors a patched [webtransport-go](third_party/webtransport-go/QUICVIDEO_PATCHES.md): upstream doesn't support quic-go v0.65 yet.
+
 ## Configuration (env)
 
 | Var | Default | |

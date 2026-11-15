@@ -4,6 +4,7 @@ package http
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	nethttp "net/http"
 	"time"
@@ -22,10 +23,28 @@ func NewRouter(version string, metricsHandler nethttp.Handler) nethttp.Handler {
 	return mux
 }
 
-// NewPublicRouter serves GET /healthz.
-func NewPublicRouter() nethttp.Handler {
+// PublicOptions configure the public listener.
+type PublicOptions struct {
+	// DevCertHash is the SHA-256 of the self-signed dev certificate (hex),
+	// served at /v1/dev/cert-hash so browsers can trust it through
+	// WebTransport's serverCertificateHashes. Empty with a real cert.
+	DevCertHash string
+	// QUICPort is the UDP port browsers open WebTransport sessions on.
+	QUICPort int
+}
+
+// NewPublicRouter serves GET /healthz, the browser demo (/web/) and, for
+// a dev certificate, its hash.
+func NewPublicRouter(o PublicOptions) nethttp.Handler {
 	mux := nethttp.NewServeMux()
 	mux.HandleFunc("GET /healthz", healthz)
+	mux.Handle("GET /web/", nethttp.StripPrefix("/web/", nethttp.FileServerFS(webFS())))
+	mux.HandleFunc("GET /v1/info", func(w nethttp.ResponseWriter, _ *nethttp.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+		_ = json.NewEncoder(w).Encode(map[string]any{"quic_port": o.QUICPort, "webtransport_path": "/wt",
+			"dev_cert_hash": o.DevCertHash})
+	})
 	return mux
 }
 
@@ -39,10 +58,10 @@ func StartServerWithContext(ctx context.Context, addr, version string, metricsHa
 	})
 }
 
-func StartPublicServerWithContext(ctx context.Context, addr string) error {
+func StartPublicServerWithContext(ctx context.Context, addr string, o PublicOptions) error {
 	return serve(ctx, "public HTTP", &nethttp.Server{
 		Addr:              addr,
-		Handler:           NewPublicRouter(),
+		Handler:           NewPublicRouter(o),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       10 * time.Second,
 		WriteTimeout:      10 * time.Second,

@@ -1,4 +1,4 @@
-.PHONY: setup generate proto test vet run pub pub-h264 sub loadtest testdata docker netem viewer viewer-app
+.PHONY: setup generate proto test vet run pub pub-h264 sub loadtest testdata docker netem viewer viewer-app web web-test
 
 setup:
 	go mod download
@@ -85,3 +85,11 @@ viewer-app: viewer
 	cp examples/viewer/Info.plist bin/viewer.app/Contents/Info.plist
 	cp bin/viewer bin/viewer.app/Contents/MacOS/viewer
 	codesign --force --sign - bin/viewer.app
+
+# Browser client + demo (web/dist is committed and embedded in quicvideod).
+web:
+	cd web && npm ci && npm run proto && npm run build
+
+# Playwright: two Chromium pages and a Go bot over WebTransport.
+web-test:
+	cd web && npx playwright test

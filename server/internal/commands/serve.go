@@ -2,9 +2,13 @@ package commands
 
 import (
 	"context"
+	"crypto/sha256"
 	"crypto/tls"
+	"encoding/hex"
 	"errors"
+	"net"
 	"os/signal"
+	"strconv"
 	"syscall"
 	"time"
 
@@ -76,7 +80,9 @@ var serveCmd = &cobra.Command{
 			return http.StartServerWithContext(gctx, cfg.HTTPConfig.Addr, cfg.AppConfig.Version, provider.Handler())
 		})
 		if addr := cfg.HTTPConfig.PublicAddr; addr != "" {
-			g.Go(func() error { return http.StartPublicServerWithContext(gctx, addr) })
+			g.Go(func() error {
+				return http.StartPublicServerWithContext(gctx, addr, http.PublicOptions{DevCertHash: devCertHash(tlsConf), QUICPort: quicPort(cfg.QUICConfig.Addr)})
+			})
 		}
 		return g.Wait()
 	},
@@ -134,6 +140,25 @@ func BuildAuth(ctx context.Context, a config.AuthConfig) (auth.AuthServiceImpl, 
 		return nil, errors.New("set AUTH_JWKS_URL and/or JWT_SECRET, or AUTH_INSECURE=true for testing")
 	}
 	return comp, nil
+}
+
+// devCertHash is the hex SHA-256 of a self-signed dev certificate ("" for
+// file-based, real certificates).
+func devCertHash(c *tls.Config) string {
+	if c == nil || len(c.Certificates) == 0 || len(c.Certificates[0].Certificate) == 0 {
+		return ""
+	}
+	sum := sha256.Sum256(c.Certificates[0].Certificate[0])
+	return hex.EncodeToString(sum[:])
+}
+
+func quicPort(addr string) int {
+	_, p, err := net.SplitHostPort(addr)
+	if err != nil {
+		return 0
+	}
+	n, _ := strconv.Atoi(p)
+	return n
 }
 
 // BuildTLS loads the cert files, or makes a self-signed dev cert.
