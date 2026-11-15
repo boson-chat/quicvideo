@@ -168,15 +168,23 @@ macOS code (cgo, `_darwin` files; `media_other.go` stubs return `ErrUnsupported`
   - Forced keyframes via `kVTEncodeFrameOptionKey_ForceKeyFrame`.
 - **VideoToolbox decoder.** Rebuilds its session when SPS/PPS change (layer switches change the size). Outputs IOSurface-backed BGRA `CVPixelBuffer`s, which a `CALayer` shows directly (`contents = IOSurface`, no copy).
 
-**macviewer** is the test client: AppKit window, one layer-backed tile per remote track, a pinned big tile plus a strip, and a per-track decode goroutine that only decodes the newest group (groups can overlap at a switch). The steps after it are a proper app UI, Windows and Linux, browsers and the voice merge.
+**viewer** (`examples/viewer`) is the desktop test client, built with Gio so the same UI runs on all three platforms. The session logic is toolkit-independent (`session.go`).
+- **Controls:** camera on/off, a screen/window picker, stop sharing, leave.
+- **Self-preview:** from the camera's captures, converted to RGBA by `media.ToRGBA` via VTPixelTransferSession.
+- **Tiles:** a grid or a pinned big tile plus a strip. Decoded pictures are converted to RGBA at the tile's size and drawn as image ops.
+- **Decoding:** one decode goroutine per track that only decodes the newest group (groups can overlap at a switch).
+- **History:** it replaced the phase 3 AppKit-only `macviewer`.
 
-Verified on an M1 Max: the VideoToolbox round trip test (hardware encoder, 1280×720 → 640×360 scaling, forced keyframes with SPS/PPS, colours intact, decoder following a 640×360 → 320×180 switch). A manual run published camera and screen from one macviewer through a local quicvideod to a second macviewer: screen pinned, settling on the 1246p layer after the startup probe; camera in the strip at 360p.
+- **Default camera:** chosen by `media.DefaultCamera`: built-in, then a physical external camera, then Continuity, then virtual. AVFoundation's `transportType` tells virtual cameras (`virt`) from real ones; the system default is often a virtual camera.
+- **ObjC linking:** the Objective-C sources are compiled through a cgo preamble (`-x objective-c`) instead of as `.m` files. cmd/go adds its own `-lobjc` for every `.m` package, so linking with Gio made the linker warn about a duplicate library. CI now fails on any linker warning.
+
+Verified on an M1 Max: the VideoToolbox round trip test (hardware encoder, 1280×720 → 640×360 scaling, forced keyframes with SPS/PPS, colours intact, decoder following a 640×360 → 320×180 switch). Manual runs published camera and screen from one client through a local quicvideod to a second: screen pinned at its top layer, camera in the strip at 360p, self-preview in the corner.
 
 ## Phases
 
 1. **Done: relay working end to end.** Wire format, relay, Go SDK, pub/sub bots (synthetic and real H.264), load test, metrics.
 2. **Done: quality under bad networks.** Per-subscriber bandwidth estimate and layer choice (max layer from the client), `SubscriptionState`, `ReceiverReport`, `LayerActive` with publisher-side layer pausing, a non-blocking publisher send queue with stats, token expiry + `Refresh`, the Docker netem harness, and a CPU-pinned Linux load test.
-3. **Done (macOS): real capture, encode and decode.** `client/media` + `examples/macviewer`, see below. Windows (Windows Graphics Capture + Media Foundation/NVENC/AMF/QSV) and Linux (PipeWire portal + VAAPI/NVENC) capture and codecs are next; the `Publisher`, layer presets and tile mapping are platform-neutral already.
+3. **Done (macOS): real capture, encode and decode.** `client/media` + `examples/viewer`, see above. Windows (Windows Graphics Capture + Media Foundation/NVENC/AMF/QSV) and Linux (PipeWire portal + VAAPI/NVENC) capture and codecs are next; the `Publisher`, layer presets and tile mapping are platform-neutral already.
 4. **Browsers.** WebTransport + WebCodecs on the same stream-per-group design.
 5. **Direct P2P for 2–4 person calls, falling back to the relay.** For a small friends call, a direct QUIC connection between participants (with NAT hole punching coordinated over the relay's control stream) saves the server's bandwidth and a network hop. Bigger calls, failed hole punching or strict NATs use the relay. The media format stays the same, so the client only switches where it sends.
 6. **Merge with voice.** quicvoiced issues short-lived video tickets (Ed25519/JWKS) for the voice room you're in, so the video server never has to call auth or Ergo. One call UI, a `video` profile in boson-chat/stack, and the option to run it on a separate server.

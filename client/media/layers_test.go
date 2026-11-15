@@ -79,3 +79,20 @@ func TestLayerForTile(t *testing.T) {
 		t.Errorf("unsorted: %d", got)
 	}
 }
+
+func TestDefaultCamera(t *testing.T) {
+	cams := []Camera{
+		{ID: "v", Name: "Detail Camera", Kind: CameraVirtual},
+		{ID: "p", Name: "iPhone", Kind: CameraContinuity},
+		{ID: "u", Name: "MX Brio", Kind: CameraExternal},
+		{ID: "f", Name: "FaceTime HD Camera", Kind: CameraBuiltIn},
+	}
+	for n, want := range map[int]string{4: "f", 3: "u", 2: "p", 1: "v"} {
+		if c, _ := DefaultCamera(cams[:n]); c.ID != want {
+			t.Errorf("first %d cameras: got %q, want %q", n, c.ID, want)
+		}
+	}
+	if _, ok := DefaultCamera(nil); ok {
+		t.Fatal("no cameras")
+	}
+}

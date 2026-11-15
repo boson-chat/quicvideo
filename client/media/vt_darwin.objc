@@ -276,3 +276,27 @@ void *qv_pb_lock(void *pb, int readonly, int *stride) {
 void qv_pb_unlock(void *pb, int readonly) {
     CVPixelBufferUnlockBaseAddress((CVPixelBufferRef)pb, readonly ? kCVPixelBufferLock_ReadOnly : 0);
 }
+
+// Converts (and scales) any pixel buffer to a new BGRA one: camera and
+// screen captures are NV12, the UI wants RGBA.
+static VTPixelTransferSessionRef gTransfer;
+static dispatch_once_t gTransferOnce;
+static NSLock *gTransferLock;
+
+void *qv_pb_to_bgra(void *src, int width, int height) {
+    dispatch_once(&gTransferOnce, ^{
+      VTPixelTransferSessionCreate(NULL, &gTransfer);
+      VTSessionSetProperty(gTransfer, kVTPixelTransferPropertyKey_ScalingMode, kVTScalingMode_Letterbox);
+      gTransferLock = [[NSLock alloc] init];
+    });
+    CVPixelBufferRef dst = qv_pb_new_bgra(width, height);
+    if (dst == NULL) return NULL;
+    [gTransferLock lock];
+    OSStatus st = VTPixelTransferSessionTransferImage(gTransfer, (CVPixelBufferRef)src, dst);
+    [gTransferLock unlock];
+    if (st != noErr) {
+        CVPixelBufferRelease(dst);
+        return NULL;
+    }
+    return dst;
+}

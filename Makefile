@@ -1,4 +1,4 @@
-.PHONY: setup generate proto test vet run pub pub-h264 sub loadtest testdata docker netem macviewer macviewer-app
+.PHONY: setup generate proto test vet run pub pub-h264 sub loadtest testdata docker netem viewer viewer-app
 
 setup:
 	go mod download
@@ -73,15 +73,15 @@ docker:
 netem:
 	netem/run.sh
 
-# macOS viewer/publisher app (AppKit + ScreenCaptureKit + VideoToolbox).
-# Running it from a terminal attributes Camera/Screen Recording permissions
-# to the terminal; the bundle gets its own entry in System Settings.
-macviewer:
-	go build -o bin/macviewer ./examples/macviewer
+# Desktop viewer (Gio UI; macOS capture/codecs today). Started from a
+# terminal, Camera/Screen Recording permissions belong to the terminal; the
+# bundle gets its own entry in System Settings.
+viewer:
+	go build -o bin/viewer ./examples/viewer
 
-macviewer-app: macviewer
-	rm -rf bin/macviewer.app
-	mkdir -p bin/macviewer.app/Contents/MacOS
-	cp examples/macviewer/Info.plist bin/macviewer.app/Contents/Info.plist
-	cp bin/macviewer bin/macviewer.app/Contents/MacOS/macviewer
-	codesign --force --sign - bin/macviewer.app
+viewer-app: viewer
+	rm -rf bin/viewer.app
+	mkdir -p bin/viewer.app/Contents/MacOS
+	cp examples/viewer/Info.plist bin/viewer.app/Contents/Info.plist
+	cp bin/viewer bin/viewer.app/Contents/MacOS/viewer
+	codesign --force --sign - bin/viewer.app

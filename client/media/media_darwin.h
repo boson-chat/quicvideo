@@ -33,6 +33,7 @@ void qv_pb_release(void *pb);
 void *qv_pb_iosurface(void *pb);
 void *qv_pb_lock(void *pb, int readonly, int *stride); // base address
 void qv_pb_unlock(void *pb, int readonly);
+void *qv_pb_to_bgra(void *pb, int width, int height); // new BGRA copy, scaled; NULL on failure
 
 // ---- permissions (TCC) ----
 // 1 granted, 0 denied/restricted, -1 not determined (a prompt would show).

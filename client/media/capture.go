@@ -19,11 +19,50 @@ type Window struct {
 	Width, Height int
 }
 
+// CameraKind is how a camera is attached.
+type CameraKind string
+
+const (
+	CameraBuiltIn    CameraKind = "builtin"    // e.g. the FaceTime camera
+	CameraExternal   CameraKind = "external"   // a physical USB/Thunderbolt webcam
+	CameraContinuity CameraKind = "continuity" // an iPhone
+	CameraVirtual    CameraKind = "virtual"    // OBS, Immersed, Detail...: software, not a camera
+)
+
 // Camera is a video capture device.
 type Camera struct {
 	ID      string // stable unique id
 	Name    string
+	Kind    CameraKind
 	Formats []CameraFormat
+}
+
+// DefaultCamera picks the camera to use when none is chosen: built-in
+// first, then a physical external webcam, then Continuity (iPhone), and a
+// virtual camera only if there's nothing else. The OS default is often a
+// virtual camera, which is rarely what someone joining a call wants.
+func DefaultCamera(cams []Camera) (Camera, bool) {
+	rank := func(k CameraKind) int {
+		switch k {
+		case CameraBuiltIn:
+			return 0
+		case CameraExternal:
+			return 1
+		case CameraContinuity:
+			return 2
+		}
+		return 3
+	}
+	best := -1
+	for i, c := range cams {
+		if best < 0 || rank(c.Kind) < rank(cams[best].Kind) {
+			best = i
+		}
+	}
+	if best < 0 {
+		return Camera{}, false
+	}
+	return cams[best], true
 }
 
 // CameraFormat is a size the camera can deliver, with its best frame rate.
@@ -50,6 +89,12 @@ type CameraOptions struct {
 	ID            string
 	Width, Height int
 	FPS           int
+}
+
+// VideoDecoder decodes one track's Annex-B access units to Pictures.
+type VideoDecoder interface {
+	Decode(au []byte, captureUS uint64) error
+	Close()
 }
 
 // Permission is a privacy (TCC) permission state.
