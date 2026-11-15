@@ -145,11 +145,38 @@ A busy evening with **3–5 calls of 4–8 people** comes to about **50–150 Mb
 
 The current boson VPS (2 shared vCPU, 2 GB) is fine for development and one or two small calls. Once people actually use it, video should move to its own box so a screen share can't starve IRC, auth or voice.
 
+## Client media (phase 3, macOS)
+
+`client/media` splits into platform-neutral Go and platform code:
+
+- **Layer presets.** `CameraLayers(w, h, fps)` gives quarter size at half rate, half size, and full size capped at 720p; `ScreenLayers(w, h)` gives ≤1280 wide at 5 fps and ≤1920 wide at 15 fps. Bitrates come from bits per pixel per frame (camera 0.042, screen 0.07), so 720p30 ≈ 1.16 Mbps and a 1920-wide screen ≈ 2.5 Mbps.
+- **`LayerForTile`.** Picks the smallest layer that, fitted into the tile's device pixels, is upscaled by at most ~11%; that becomes the subscription's max layer. Hidden tiles unsubscribe.
+- **`Publisher`.** Runs one encoder per **active** layer: created on `LayerActive(true)`, closed on false, so unwatched layers cost neither CPU nor upload.
+  - Per-layer fps cap with 15% slack.
+  - Forced keyframes on activation, on `KeyframeRequest` or a local send-queue drop, and after the track refuses a frame (`ErrNeedKeyframe` / `ErrBackpressure`).
+  - It keeps the last captured picture and re-encodes it as a keyframe right away. ScreenCaptureKit sends nothing while the screen is static, so without this a new viewer of a static screen would wait for the next change.
+- **Annex-B ↔ AVCC.** quicvideo carries Annex-B access units (AUD, then SPS/PPS on keyframes, then the slices). VideoToolbox speaks AVCC; the conversion is pure Go.
+
+macOS code (cgo, `_darwin` files; `media_other.go` stubs return `ErrUnsupported`):
+- **ScreenCaptureKit.** Display or window capture, scaled to ≤1920 wide, NV12, fps cap. Only `SCFrameStatusComplete` frames are delivered; idle frames are skipped, so a static screen costs nothing.
+- **AVFoundation.** Camera list with formats; the closest format that supports the requested fps; NV12; late frames discarded.
+- **VideoToolbox encoder.**
+  - Hardware with `EnableLowLatencyRateControl`, falling back to plain hardware, then software.
+  - Real-time, no frame reordering (no B-frames), Constrained High profile.
+  - Average bitrate with a 1.5× one-second cap, max keyframe interval (2 s camera, 4 s screen), `MaxFrameDelayCount` 0.
+  - Scaling to the layer size via `VTPixelTransferSession` (letterbox).
+  - Forced keyframes via `kVTEncodeFrameOptionKey_ForceKeyFrame`.
+- **VideoToolbox decoder.** Rebuilds its session when SPS/PPS change (layer switches change the size). Outputs IOSurface-backed BGRA `CVPixelBuffer`s, which a `CALayer` shows directly (`contents = IOSurface`, no copy).
+
+**macviewer** is the test client: AppKit window, one layer-backed tile per remote track, a pinned big tile plus a strip, and a per-track decode goroutine that only decodes the newest group (groups can overlap at a switch). The steps after it are a proper app UI, Windows and Linux, browsers and the voice merge.
+
+Verified on an M1 Max: the VideoToolbox round trip test (hardware encoder, 1280×720 → 640×360 scaling, forced keyframes with SPS/PPS, colours intact, decoder following a 640×360 → 320×180 switch). A manual run published camera and screen from one macviewer through a local quicvideod to a second macviewer: screen pinned, settling on the 1246p layer after the startup probe; camera in the strip at 360p.
+
 ## Phases
 
 1. **Done: relay working end to end.** Wire format, relay, Go SDK, pub/sub bots (synthetic and real H.264), load test, metrics.
 2. **Done: quality under bad networks.** Per-subscriber bandwidth estimate and layer choice (max layer from the client), `SubscriptionState`, `ReceiverReport`, `LayerActive` with publisher-side layer pausing, a non-blocking publisher send queue with stats, token expiry + `Refresh`, the Docker netem harness, and a CPU-pinned Linux load test.
-3. **Real capture and encoding in the client.** macOS first (ScreenCaptureKit + VideoToolbox), then Windows (WGC + Media Foundation/NVENC) and Linux (PipeWire + VAAPI/NVENC), plus a viewer in the testapp.
+3. **Done (macOS): real capture, encode and decode.** `client/media` + `examples/macviewer`, see below. Windows (Windows Graphics Capture + Media Foundation/NVENC/AMF/QSV) and Linux (PipeWire portal + VAAPI/NVENC) capture and codecs are next; the `Publisher`, layer presets and tile mapping are platform-neutral already.
 4. **Browsers.** WebTransport + WebCodecs on the same stream-per-group design.
 5. **Direct P2P for 2–4 person calls, falling back to the relay.** For a small friends call, a direct QUIC connection between participants (with NAT hole punching coordinated over the relay's control stream) saves the server's bandwidth and a network hop. Bigger calls, failed hole punching or strict NATs use the relay. The media format stays the same, so the client only switches where it sends.
 6. **Merge with voice.** quicvoiced issues short-lived video tickets (Ed25519/JWKS) for the voice room you're in, so the video server never has to call auth or Ergo. One call UI, a `video` profile in boson-chat/stack, and the option to run it on a separate server.

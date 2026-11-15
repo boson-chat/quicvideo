@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleIdentifier</key>
+	<string>chat.boson.quicvideo.macviewer</string>
+	<key>CFBundleName</key>
+	<string>quicvideo viewer</string>
+	<key>CFBundleExecutable</key>
+	<string>macviewer</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>CFBundleShortVersionString</key>
+	<string>0.1</string>
+	<key>LSMinimumSystemVersion</key>
+	<string>13.0</string>
+	<key>NSHighResolutionCapable</key>
+	<true/>
+	<!-- Required: without it macOS kills the process when the camera is opened. -->
+	<key>NSCameraUsageDescription</key>
+	<string>quicvideo viewer shares your camera with the people in your call.</string>
+	<!-- Screen recording has no usage-string key; the system prompt names the app. -->
+</dict>
+</plist>
