@@ -254,7 +254,17 @@ char *qv_camera_list(char **err) {
             [formats addObject:@{@"width" : @([wh[0] intValue]), @"height" : @([wh[1] intValue]),
                                  @"max_fps" : @((int)round([best[k] doubleValue]))}];
         }
-        [out addObject:@{@"id" : d.uniqueID, @"name" : d.localizedName, @"formats" : formats}];
+        // transportType tells virtual cameras ('virt': OBS, Immersed...) from
+        // real ones ('usb ', 'bltn'); iPhones report 'othr'.
+        NSString *kind = @"external";
+        int32_t transport = d.transportType;
+        if ([d.deviceType isEqualToString:AVCaptureDeviceTypeBuiltInWideAngleCamera] || transport == 'bltn') kind = @"builtin";
+        else if (transport == 'virt') kind = @"virtual";
+        else if (transport == 'othr') kind = @"continuity";
+        if (@available(macOS 14.0, *)) {
+            if ([d.deviceType isEqualToString:AVCaptureDeviceTypeContinuityCamera]) kind = @"continuity";
+        }
+        [out addObject:@{@"id" : d.uniqueID, @"name" : d.localizedName, @"kind" : kind, @"formats" : formats}];
     }
     return jsonString(out);
 }

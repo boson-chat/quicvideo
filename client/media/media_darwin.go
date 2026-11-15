@@ -3,7 +3,7 @@
 package media
 
 /*
-#cgo CFLAGS: -fobjc-arc -Wno-unused-command-line-argument -mmacosx-version-min=13.0
+#cgo CFLAGS: -Wno-unused-command-line-argument -mmacosx-version-min=13.0
 #cgo LDFLAGS: -framework Foundation -framework CoreMedia -framework CoreVideo -framework VideoToolbox -framework CoreGraphics -framework IOSurface -framework ScreenCaptureKit -framework AVFoundation -framework AppKit
 #include <stdlib.h>
 #include "media_darwin.h"
@@ -43,6 +43,34 @@ func (p *PixelBuffer) lock(readonly bool) ([]byte, int, func()) {
 	base := C.qv_pb_lock(p.ref, cbool(readonly), &stride)
 	_, h := p.Size()
 	return unsafe.Slice((*byte)(base), int(stride)*h), int(stride), func() { C.qv_pb_unlock(p.ref, cbool(readonly)) }
+}
+
+// ToRGBA converts a picture (any pixel format, e.g. an NV12 capture) to
+// an RGBA image, scaled down to at most maxW pixels wide (0 = full size).
+func ToRGBA(pic Picture, maxW int) (*image.RGBA, error) {
+	p, ok := pic.(*PixelBuffer)
+	if !ok {
+		return nil, errors.New("media: ToRGBA needs a *PixelBuffer")
+	}
+	w, h := p.Size()
+	if maxW > 0 && w > maxW {
+		w, h = fit(w, h, maxW, maxW*h/max(w, 1)+2)
+	}
+	if pw, ph := p.Size(); pw == w && ph == h && uint32(C.qv_pb_format(p.ref)) == fourccBGRA {
+		return p.RGBA()
+	}
+	ref := C.qv_pb_to_bgra(p.ref, C.int(w), C.int(h))
+	if ref == nil {
+		return nil, errors.New("media: pixel conversion failed")
+	}
+	tmp := wrapPB(ref)
+	defer tmp.Release()
+	return tmp.RGBA()
+}
+
+// NewVideoDecoder makes the platform's H.264 decoder (VideoToolbox).
+func NewVideoDecoder(out func(pic Picture, captureUS uint64)) (VideoDecoder, error) {
+	return NewDecoder(func(pb *PixelBuffer, us uint64) { out(pb, us) })
 }
 
 // RGBA copies a BGRA buffer into an image (tests, screenshots).

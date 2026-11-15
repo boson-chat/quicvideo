@@ -25,12 +25,14 @@ jobs:
           # Ignore the protoc version comment; only the generated code matters.
           diff <(grep -v '^// .protoc ' "$tmp/gen/controlpb/control.pb.go") \
                <(grep -v '^// .protoc ' gen/controlpb/control.pb.go)
+      - name: Gio (examples/viewer) needs X11/Wayland/EGL headers
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq libwayland-dev libx11-dev libx11-xcb-dev libxkbcommon-x11-dev libgles2-mesa-dev libegl1-mesa-dev libffi-dev libxcursor-dev libvulkan-dev
       - run: go vet ./...
       - run: go test -race ./...
 
   macos:
     # The darwin media code (ScreenCaptureKit, AVFoundation, VideoToolbox)
-    # and the macviewer app. Capture needs TCC permissions a runner doesn't
+    # and the viewer. Capture needs TCC permissions a runner doesn't
     # have, so only builds + the VideoToolbox round trip run here.
     runs-on: macos-15
     steps:
@@ -38,6 +40,9 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
-      - run: go vet ./client/... ./examples/macviewer/
-      - run: go test ./client/... ./examples/macviewer/
-      - run: go build -o /tmp/macviewer ./examples/macviewer
+      - run: go vet ./client/... ./examples/viewer/
+      - run: go test ./client/... ./examples/viewer/
+      - name: viewer links without linker warnings
+        run: |
+          go build -o /tmp/viewer ./examples/viewer 2>&1 | tee /tmp/build.log
+          ! grep -q "warning" /tmp/build.log

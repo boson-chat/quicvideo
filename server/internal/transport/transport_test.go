@@ -41,7 +41,8 @@ func startServerCfg(t *testing.T, a auth.AuthServiceImpl, edit func(*config.Conf
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	m := metrics.Nop()
-	r := relay.New(ctx, relay.Options{Metrics: m, KeyframeRequestInterval: 50 * time.Millisecond})
+	r := relay.New(ctx, relay.Options{Metrics: m, KeyframeRequestInterval: 50 * time.Millisecond,
+		Trace: func(session uint32, msg string) { t.Logf("controller s%d: %s", session, msg) }})
 	srv := transport.NewServer(cfg, &tls.Config{Certificates: []tls.Certificate{cert}}, a, r, m)
 	done := make(chan struct{})
 	go func() { _ = srv.Serve(ctx); close(done) }()

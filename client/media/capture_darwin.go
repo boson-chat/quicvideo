@@ -196,8 +196,8 @@ func ListCameras() ([]Camera, error) {
 	}
 	defer C.free(unsafe.Pointer(js))
 	var v []struct {
-		ID, Name string
-		Formats  []struct {
+		ID, Name, Kind string
+		Formats        []struct {
 			Width, Height int
 			MaxFPS        int `json:"max_fps"`
 		}
@@ -207,7 +207,7 @@ func ListCameras() ([]Camera, error) {
 	}
 	out := make([]Camera, 0, len(v))
 	for _, c := range v {
-		cam := Camera{ID: c.ID, Name: c.Name}
+		cam := Camera{ID: c.ID, Name: c.Name, Kind: CameraKind(c.Kind)}
 		for _, f := range c.Formats {
 			cam.Formats = append(cam.Formats, CameraFormat(f))
 		}
@@ -224,6 +224,15 @@ func StartCamera(o CameraOptions, push func(CapturedFrame)) (Source, error) {
 	}
 	if o.Width <= 0 || o.Height <= 0 {
 		o.Width, o.Height = 1280, 720
+	}
+	if o.ID == "" {
+		// The system default is often a virtual camera (Immersed, OBS...);
+		// prefer a real built-in one.
+		if cams, err := ListCameras(); err == nil {
+			if c, ok := DefaultCamera(cams); ok {
+				o.ID = c.ID
+			}
+		}
 	}
 	if o.FPS <= 0 {
 		o.FPS = 30

@@ -3,11 +3,11 @@
 <plist version="1.0">
 <dict>
 	<key>CFBundleIdentifier</key>
-	<string>chat.boson.quicvideo.macviewer</string>
+	<string>chat.boson.quicvideo.viewer</string>
 	<key>CFBundleName</key>
 	<string>quicvideo viewer</string>
 	<key>CFBundleExecutable</key>
-	<string>macviewer</string>
+	<string>viewer</string>
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
