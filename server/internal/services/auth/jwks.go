@@ -33,15 +33,17 @@ func NewJWKSAuthService(ctx context.Context, jwksURLs, issuers, audience string)
 		return nil, errors.New("auth: JWKS URL is empty")
 	}
 	// keyfunc's defaults allow one unknown-kid refresh per 5 minutes and
-	// queue other tokens behind it: the second of two tickets arriving
-	// together after a key change (or after the JWKS was down at boot) was
-	// rejected, and a failed refresh locked everyone out for 5 minutes.
-	// Instead: at most one refresh a second, tokens don't queue for it
-	// (RateLimitWaitMax ~0), and Verify retries for a moment so they pick
-	// up the key another caller's refresh fetched.
+	// fail a token that would wait over a minute for it: the second of two
+	// tickets arriving together after a key change (or after the JWKS was
+	// down at boot) was rejected, and a failed refresh locked everyone out
+	// for 5 minutes. Allow a refresh every 200 ms instead. RateLimitWaitMax
+	// bounds the wait for the limiter *and* the refresh request itself
+	// (jwkset uses one context for both), so it must leave time for the
+	// fetch. Verify also retries briefly, for keys another caller's refresh
+	// is about to bring in.
 	k, err := keyfunc.NewDefaultOverrideCtx(ctx, urls, keyfunc.Override{
-		RefreshUnknownKID: rate.NewLimiter(rate.Every(time.Second), 1),
-		RateLimitWaitMax:  time.Millisecond,
+		RefreshUnknownKID: rate.NewLimiter(rate.Every(200*time.Millisecond), 1),
+		RateLimitWaitMax:  5 * time.Second,
 		HTTPTimeout:       5 * time.Second,
 		RefreshInterval:   15 * time.Minute,
 	})
