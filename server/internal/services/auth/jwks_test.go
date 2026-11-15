@@ -82,6 +82,9 @@ func TestJWKSDownAtStartThenConcurrentTokens(t *testing.T) {
 	}
 	var up atomic.Bool
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		// Not instant, like a JWKS across a container network: the refresh
+		// must get time to finish (a 1 ms budget passed on localhost only).
+		time.Sleep(50 * time.Millisecond)
 		if !up.Load() {
 			http.Error(w, "starting", http.StatusServiceUnavailable)
 			return
