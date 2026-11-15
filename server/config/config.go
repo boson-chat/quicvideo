@@ -59,6 +59,13 @@ type QUICConfig struct {
 }
 
 type HTTPConfig struct {
+	// Control listener for quicvoiced (voice → video membership: leaves,
+	// closed channels, snapshots). Empty = off. Bearer CONTROL_TOKEN.
+	ControlAddr  string `env:"CONTROL_HTTP_ADDR"`
+	ControlToken string `env:"CONTROL_TOKEN"`
+	// Rooms missing from voice's snapshot are emptied too (all video rooms
+	// are voice channels).
+	VoiceSyncStrict bool `default:"false" env:"VOICE_SYNC"`
 	// Health + version + metrics. Internal only.
 	Addr string `default:":8080" env:"HTTP_ADDR"`
 	// Public listener (GET /healthz), meant to sit behind a TLS reverse

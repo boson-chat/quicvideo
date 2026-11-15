@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -17,21 +18,34 @@ import (
 // rotation).
 type JWKSAuthService struct {
 	keys     keyfunc.Keyfunc
-	issuer   string
+	issuers  []string // any of these (empty = don't check)
 	audience string
 }
 
-// NewJWKSAuthService starts the JWKS cache. A JWKS endpoint that is down at
-// startup isn't fatal: verification fails until it can be fetched.
-func NewJWKSAuthService(ctx context.Context, jwksURL, issuer, audience string) (*JWKSAuthService, error) {
-	if jwksURL == "" {
+// NewJWKSAuthService starts the JWKS cache. jwksURLs and issuers are
+// comma-separated lists: e.g. the auth service's JWKS and quicvoiced's
+// video-ticket JWKS (keys are matched by kid). A JWKS endpoint that is down
+// at startup isn't fatal: verification fails until it can be fetched.
+func NewJWKSAuthService(ctx context.Context, jwksURLs, issuers, audience string) (*JWKSAuthService, error) {
+	urls := splitList(jwksURLs)
+	if len(urls) == 0 {
 		return nil, errors.New("auth: JWKS URL is empty")
 	}
-	k, err := keyfunc.NewDefaultCtx(ctx, []string{jwksURL})
+	k, err := keyfunc.NewDefaultCtx(ctx, urls)
 	if err != nil {
-		return nil, fmt.Errorf("auth: JWKS %s: %w", jwksURL, err)
+		return nil, fmt.Errorf("auth: JWKS %s: %w", jwksURLs, err)
 	}
-	return &JWKSAuthService{keys: k, issuer: issuer, audience: audience}, nil
+	return &JWKSAuthService{keys: k, issuers: splitList(issuers), audience: audience}, nil
+}
+
+func splitList(s string) []string {
+	var out []string
+	for _, p := range strings.Split(s, ",") {
+		if p = strings.TrimSpace(p); p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
 }
 
 func (s *JWKSAuthService) Verify(_ context.Context, token string) (*Identity, error) {
@@ -40,14 +54,14 @@ func (s *JWKSAuthService) Verify(_ context.Context, token string) (*Identity, er
 		jwt.WithExpirationRequired(),
 		jwt.WithLeeway(30 * time.Second),
 	}
-	if s.issuer != "" {
-		opts = append(opts, jwt.WithIssuer(s.issuer))
-	}
 	if s.audience != "" {
 		opts = append(opts, jwt.WithAudience(s.audience))
 	}
 	var c Claims
 	_, err := jwt.ParseWithClaims(token, &c, s.keys.Keyfunc, opts...)
+	if err == nil && len(s.issuers) > 0 && !slices.Contains(s.issuers, c.Issuer) {
+		return nil, ErrUnauthenticated
+	}
 	return identityFromClaims(&c, err)
 }
 
