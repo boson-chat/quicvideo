@@ -50,6 +50,16 @@ jobs:
         run: |
           go build -o /tmp/viewer ./examples/viewer 2>&1 | tee /tmp/build.log
           ! grep -q "warning" /tmp/build.log
+      # iOS (the boson app's camera): camera + VideoToolbox only, built for
+      # iOS 16 (boson's minimum); screen capture is macOS-only.
+      - name: client/media builds and links for iOS, without macOS-only frameworks
+        run: |
+          SDK=$(xcrun --sdk iphoneos --show-sdk-path)
+          export GOOS=ios GOARCH=arm64 CGO_ENABLED=1 CC="$(xcrun --sdk iphoneos --find clang)"
+          export CGO_CFLAGS="-isysroot $SDK -target arm64-apple-ios16.0 -miphoneos-version-min=16.0"
+          export CGO_LDFLAGS="-isysroot $SDK -target arm64-apple-ios16.0"
+          go build -o /tmp/captest-ios ./examples/captest
+          ! otool -L /tmp/captest-ios | grep -E "AppKit|ScreenCaptureKit|IOKit"
 
   windows:
     # Windows media backend (Media Foundation, Windows.Graphics.Capture) and

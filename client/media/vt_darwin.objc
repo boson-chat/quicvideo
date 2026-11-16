@@ -1,4 +1,5 @@
 // VideoToolbox H.264 encode/decode for package media.
+#include <TargetConditionals.h>
 #import <Foundation/Foundation.h>
 #import <VideoToolbox/VideoToolbox.h>
 #import <CoreMedia/CoreMedia.h>
@@ -75,18 +76,34 @@ qv_enc *qv_enc_new(int width, int height, int fps, int bitrate, int gop_frames, 
     // Hardware encoder with low-latency rate control (no frame reordering,
     // short lookahead); fall back to plain hardware, then anything.
     NSArray *specs = @[
-        @{(__bridge NSString *)kVTVideoEncoderSpecification_EnableLowLatencyRateControl : @YES,
-          (__bridge NSString *)kVTVideoEncoderSpecification_RequireHardwareAcceleratedVideoEncoder : @YES},
-        @{(__bridge NSString *)kVTVideoEncoderSpecification_RequireHardwareAcceleratedVideoEncoder : @YES},
+        @{(__bridge NSString *)kVTVideoEncoderSpecification_EnableLowLatencyRateControl : @YES},
         @{},
     ];
+    // Requiring the hardware encoder: always on macOS; on iOS from 17.4
+    // (before that the key doesn't exist; iOS devices encode H.264 in
+    // hardware anyway).
+    BOOL canRequire = YES;
+#if !TARGET_OS_OSX
+    canRequire = NO;
+    if (@available(iOS 17.4, *)) canRequire = YES;
+#endif
+    if (canRequire) {
+        if (@available(iOS 17.4, macOS 10.15, *)) {
+            specs = @[
+                @{(__bridge NSString *)kVTVideoEncoderSpecification_EnableLowLatencyRateControl : @YES,
+                  (__bridge NSString *)kVTVideoEncoderSpecification_RequireHardwareAcceleratedVideoEncoder : @YES},
+                @{(__bridge NSString *)kVTVideoEncoderSpecification_RequireHardwareAcceleratedVideoEncoder : @YES},
+                @{},
+            ];
+        }
+    }
     OSStatus st = -1;
     for (NSUInteger i = 0; i < specs.count; i++) {
         st = VTCompressionSessionCreate(NULL, width, height, kCMVideoCodecType_H264,
                                         (__bridge CFDictionaryRef)specs[i], NULL, NULL, encOutput, e,
                                         &e->session);
         if (st == noErr) {
-            *hardware = i < 2;
+            *hardware = i < specs.count - 1;
             break;
         }
     }

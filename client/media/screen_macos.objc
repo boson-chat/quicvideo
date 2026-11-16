@@ -1,0 +1,207 @@
+// Screen capture (ScreenCaptureKit, macOS 12.3+) and its TCC permission.
+// macOS only: included by capture_darwin.objc when TARGET_OS_OSX.
+
+int qv_screen_access(void) { return CGPreflightScreenCaptureAccess() ? 1 : -1; }
+
+void qv_screen_request(void) { CGRequestScreenCaptureAccess(); }
+
+// ---------------------------------------------------------------- screen
+
+// ScreenCaptureKit is weak-linked (macOS 12.3+): apps built for an older
+// minimum still launch there, without screen sharing.
+int qv_screen_supported(void) {
+    if (@available(macOS 12.3, *)) return 1;
+    return 0;
+}
+
+static SCShareableContent *shareableContent(NSError **outErr) API_AVAILABLE(macos(12.3));
+static SCShareableContent *shareableContent(NSError **outErr) {
+    __block SCShareableContent *content = nil;
+    __block NSError *error = nil;
+    dispatch_semaphore_t sem = dispatch_semaphore_create(0);
+    [SCShareableContent getShareableContentExcludingDesktopWindows:YES
+                                               onScreenWindowsOnly:YES
+                                                 completionHandler:^(SCShareableContent *c, NSError *e) {
+                                                   content = c;
+                                                   error = e;
+                                                   dispatch_semaphore_signal(sem);
+                                                 }];
+    if (dispatch_semaphore_wait(sem, dispatch_time(DISPATCH_TIME_NOW, 10 * NSEC_PER_SEC)) != 0) {
+        *outErr = [NSError errorWithDomain:@"qv" code:-1 userInfo:@{NSLocalizedDescriptionKey : @"timed out"}];
+        return nil;
+    }
+    *outErr = error;
+    return content;
+}
+
+static void displayPixels(CGDirectDisplayID d, int *w, int *h) {
+    CGDisplayModeRef mode = CGDisplayCopyDisplayMode(d);
+    *w = (int)CGDisplayModeGetPixelWidth(mode);
+    *h = (int)CGDisplayModeGetPixelHeight(mode);
+    CGDisplayModeRelease(mode);
+}
+
+static char *screenList(char **err) API_AVAILABLE(macos(12.3)) {
+    NSError *e = nil;
+    SCShareableContent *c = shareableContent(&e);
+    if (c == nil) {
+        *err = nserr(@"listing screens failed", e);
+        return NULL;
+    }
+    NSMutableArray *displays = [NSMutableArray array];
+    for (SCDisplay *d in c.displays) {
+        int w, h;
+        displayPixels(d.displayID, &w, &h);
+        [displays addObject:@{
+            @"id" : @(d.displayID), @"width" : @(w), @"height" : @(h),
+            @"main" : (d.displayID == CGMainDisplayID() ? @YES : @NO)
+        }];
+    }
+    NSMutableArray *windows = [NSMutableArray array];
+    for (SCWindow *w in c.windows) {
+        if (w.windowLayer != 0 || w.frame.size.width < 64 || w.frame.size.height < 64) continue; // normal windows
+        [windows addObject:@{
+            @"id" : @(w.windowID), @"title" : w.title ?: @"", @"app" : w.owningApplication.applicationName ?: @"",
+            @"width" : @((int)w.frame.size.width), @"height" : @((int)w.frame.size.height)
+        }];
+    }
+    return jsonString(@{@"displays" : displays, @"windows" : windows});
+}
+
+char *qv_screen_list(char **err) {
+    if (@available(macOS 12.3, *)) return screenList(err);
+    *err = strdup("screen sharing needs macOS 12.3 or later");
+    return NULL;
+}
+
+API_AVAILABLE(macos(12.3))
+@interface QVScreenOutput : NSObject <SCStreamOutput, SCStreamDelegate>
+@property(atomic) uintptr_t handle;
+@end
+
+@implementation QVScreenOutput
+- (void)stream:(SCStream *)stream didOutputSampleBuffer:(CMSampleBufferRef)sb ofType:(SCStreamOutputType)type {
+    if (type != SCStreamOutputTypeScreen || !CMSampleBufferIsValid(sb)) return;
+    CFArrayRef atts = CMSampleBufferGetSampleAttachmentsArray(sb, false);
+    if (atts == NULL || CFArrayGetCount(atts) == 0) return;
+    NSDictionary *info = (__bridge NSDictionary *)CFArrayGetValueAtIndex(atts, 0);
+    NSNumber *status = info[SCStreamFrameInfoStatus];
+    // Idle = nothing changed since the last frame: no new image, nothing to
+    // encode. A static screen costs (almost) nothing.
+    if (status == nil || status.integerValue != SCFrameStatusComplete) return;
+    CVImageBufferRef pb = CMSampleBufferGetImageBuffer(sb);
+    if (pb == NULL) return;
+    if (self.handle) qvGoScreenFrame(self.handle, (void *)pb, nowUS());
+}
+- (void)stream:(SCStream *)stream didStopWithError:(NSError *)error {
+    if (self.handle) qvGoScreenStopped(self.handle, (int)error.code, nserr(@"screen capture stopped", error));
+}
+@end
+
+struct qv_screen {
+    void *stream; // SCStream (retained)
+    void *output; // QVScreenOutput (retained)
+    void *queue;  // its sample handler queue (retained)
+};
+
+static qv_screen *screenStart(uint32_t display_id, uint32_t window_id, int width, int height, int fps, int show_cursor,
+                           uintptr_t handle, char **err) API_AVAILABLE(macos(12.3)) {
+    NSError *e = nil;
+    SCShareableContent *c = shareableContent(&e);
+    if (c == nil) {
+        *err = nserr(@"screen capture unavailable", e);
+        return NULL;
+    }
+    SCContentFilter *filter = nil;
+    int nw = 0, nh = 0;
+    if (window_id) {
+        for (SCWindow *w in c.windows) {
+            if (w.windowID == window_id) {
+                filter = [[SCContentFilter alloc] initWithDesktopIndependentWindow:w];
+                CGFloat scale = NSScreen.mainScreen.backingScaleFactor;
+                nw = (int)(w.frame.size.width * scale);
+                nh = (int)(w.frame.size.height * scale);
+            }
+        }
+    } else {
+        CGDirectDisplayID want = display_id ? display_id : CGMainDisplayID();
+        for (SCDisplay *d in c.displays) {
+            if (d.displayID == want) {
+                filter = [[SCContentFilter alloc] initWithDisplay:d excludingWindows:@[]];
+                displayPixels(d.displayID, &nw, &nh);
+            }
+        }
+    }
+    if (filter == nil) {
+        *err = strdup("no such display or window");
+        return NULL;
+    }
+    if (width <= 0 || height <= 0) {
+        width = nw;
+        height = nh;
+    }
+    SCStreamConfiguration *cfg = [[SCStreamConfiguration alloc] init];
+    cfg.width = (size_t)(width & ~1);
+    cfg.height = (size_t)(height & ~1);
+    cfg.minimumFrameInterval = CMTimeMake(1, fps > 0 ? fps : 15);
+    cfg.pixelFormat = kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange; // what the encoder wants
+    cfg.showsCursor = show_cursor ? YES : NO;
+    cfg.queueDepth = 5;
+    cfg.scalesToFit = YES;
+
+    QVScreenOutput *out = [[QVScreenOutput alloc] init];
+    out.handle = handle;
+    SCStream *stream = [[SCStream alloc] initWithFilter:filter configuration:cfg delegate:out];
+    dispatch_queue_t q = dispatch_queue_create("quicvideo.screen", DISPATCH_QUEUE_SERIAL);
+    if (![stream addStreamOutput:out type:SCStreamOutputTypeScreen sampleHandlerQueue:q error:&e]) {
+        *err = nserr(@"addStreamOutput failed", e);
+        return NULL;
+    }
+    __block NSError *startErr = nil;
+    dispatch_semaphore_t sem = dispatch_semaphore_create(0);
+    [stream startCaptureWithCompletionHandler:^(NSError *se) {
+      startErr = se;
+      dispatch_semaphore_signal(sem);
+    }];
+    dispatch_semaphore_wait(sem, dispatch_time(DISPATCH_TIME_NOW, 10 * NSEC_PER_SEC));
+    if (startErr) {
+        *err = nserr(@"starting screen capture failed", startErr);
+        return NULL;
+    }
+    qv_screen *s = calloc(1, sizeof(*s));
+    s->stream = (__bridge_retained void *)stream;
+    s->output = (__bridge_retained void *)out;
+    s->queue = (__bridge_retained void *)q;
+    return s;
+}
+
+qv_screen *qv_screen_start(uint32_t display_id, uint32_t window_id, int width, int height, int fps, int show_cursor,
+                           uintptr_t handle, char **err) {
+    if (@available(macOS 12.3, *)) return screenStart(display_id, window_id, width, height, fps, show_cursor, handle, err);
+    *err = strdup("screen sharing needs macOS 12.3 or later");
+    return NULL;
+}
+
+static void screenStop(qv_screen *s) API_AVAILABLE(macos(12.3)) {
+    if (s == NULL) return;
+    SCStream *stream = (__bridge_transfer SCStream *)s->stream;
+    QVScreenOutput *out = (__bridge_transfer QVScreenOutput *)s->output;
+    out.handle = 0; // our own stop isn't "the share ended"; late frames are dropped
+    dispatch_semaphore_t sem = dispatch_semaphore_create(0);
+    [stream stopCaptureWithCompletionHandler:^(NSError *e) {
+      dispatch_semaphore_signal(sem);
+    }];
+    dispatch_semaphore_wait(sem, dispatch_time(DISPATCH_TIME_NOW, 5 * NSEC_PER_SEC));
+    [stream removeStreamOutput:out type:SCStreamOutputTypeScreen error:nil];
+    // A frame already on the handler queue would call into Go after Stop
+    // deleted its handle: wait for the queue to drain.
+    dispatch_queue_t q = (__bridge_transfer dispatch_queue_t)s->queue;
+    dispatch_sync(q, ^{});
+    out.handle = 0;
+    free(s);
+}
+
+void qv_screen_stop(qv_screen *s) {
+    if (@available(macOS 12.3, *)) screenStop(s); // only ever started on 12.3+
+}
+

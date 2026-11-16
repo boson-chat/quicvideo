@@ -1,11 +1,15 @@
-// ScreenCaptureKit and AVFoundation capture, and TCC permission checks.
-#import <IOKit/IOKitLib.h>
+// AVFoundation camera capture (macOS and iOS), ScreenCaptureKit screen
+// capture (macOS: screen_macos.objc), and TCC permission checks.
+#include <TargetConditionals.h>
 #import <AVFoundation/AVFoundation.h>
-#import <AppKit/AppKit.h>
 #import <CoreGraphics/CoreGraphics.h>
 #import <CoreMedia/CoreMedia.h>
 #import <Foundation/Foundation.h>
+#if TARGET_OS_OSX
+#import <IOKit/IOKitLib.h>
+#import <AppKit/AppKit.h>
 #import <ScreenCaptureKit/ScreenCaptureKit.h>
+#endif
 #include <stdlib.h>
 #include <string.h>
 #include "media_darwin.h"
@@ -32,10 +36,6 @@ static int64_t nowUS(void) { return (int64_t)([[NSDate date] timeIntervalSince19
 
 // ---------------------------------------------------------------- TCC
 
-int qv_screen_access(void) { return CGPreflightScreenCaptureAccess() ? 1 : -1; }
-
-void qv_screen_request(void) { CGRequestScreenCaptureAccess(); }
-
 int qv_camera_access(void) {
     switch ([AVCaptureDevice authorizationStatusForMediaType:AVMediaTypeVideo]) {
     case AVAuthorizationStatusAuthorized:
@@ -60,223 +60,60 @@ int qv_camera_request(int timeout_ms) {
 
 // ---------------------------------------------------------------- screen
 
-// ScreenCaptureKit is weak-linked (macOS 12.3+): apps built for an older
-// minimum still launch there, without screen sharing.
-int qv_screen_supported(void) {
-    if (@available(macOS 12.3, *)) return 1;
-    return 0;
-}
-
-static SCShareableContent *shareableContent(NSError **outErr) API_AVAILABLE(macos(12.3));
-static SCShareableContent *shareableContent(NSError **outErr) {
-    __block SCShareableContent *content = nil;
-    __block NSError *error = nil;
-    dispatch_semaphore_t sem = dispatch_semaphore_create(0);
-    [SCShareableContent getShareableContentExcludingDesktopWindows:YES
-                                               onScreenWindowsOnly:YES
-                                                 completionHandler:^(SCShareableContent *c, NSError *e) {
-                                                   content = c;
-                                                   error = e;
-                                                   dispatch_semaphore_signal(sem);
-                                                 }];
-    if (dispatch_semaphore_wait(sem, dispatch_time(DISPATCH_TIME_NOW, 10 * NSEC_PER_SEC)) != 0) {
-        *outErr = [NSError errorWithDomain:@"qv" code:-1 userInfo:@{NSLocalizedDescriptionKey : @"timed out"}];
-        return nil;
-    }
-    *outErr = error;
-    return content;
-}
-
-static void displayPixels(CGDirectDisplayID d, int *w, int *h) {
-    CGDisplayModeRef mode = CGDisplayCopyDisplayMode(d);
-    *w = (int)CGDisplayModeGetPixelWidth(mode);
-    *h = (int)CGDisplayModeGetPixelHeight(mode);
-    CGDisplayModeRelease(mode);
-}
-
-static char *screenList(char **err) API_AVAILABLE(macos(12.3)) {
-    NSError *e = nil;
-    SCShareableContent *c = shareableContent(&e);
-    if (c == nil) {
-        *err = nserr(@"listing screens failed", e);
-        return NULL;
-    }
-    NSMutableArray *displays = [NSMutableArray array];
-    for (SCDisplay *d in c.displays) {
-        int w, h;
-        displayPixels(d.displayID, &w, &h);
-        [displays addObject:@{
-            @"id" : @(d.displayID), @"width" : @(w), @"height" : @(h),
-            @"main" : (d.displayID == CGMainDisplayID() ? @YES : @NO)
-        }];
-    }
-    NSMutableArray *windows = [NSMutableArray array];
-    for (SCWindow *w in c.windows) {
-        if (w.windowLayer != 0 || w.frame.size.width < 64 || w.frame.size.height < 64) continue; // normal windows
-        [windows addObject:@{
-            @"id" : @(w.windowID), @"title" : w.title ?: @"", @"app" : w.owningApplication.applicationName ?: @"",
-            @"width" : @((int)w.frame.size.width), @"height" : @((int)w.frame.size.height)
-        }];
-    }
-    return jsonString(@{@"displays" : displays, @"windows" : windows});
-}
-
+#if TARGET_OS_OSX
+#include "screen_macos.objc"
+#else
+// iOS: no screen sharing yet (it needs a ReplayKit broadcast extension).
+int qv_screen_access(void) { return -1; }
+void qv_screen_request(void) {}
+int qv_screen_supported(void) { return 0; }
 char *qv_screen_list(char **err) {
-    if (@available(macOS 12.3, *)) return screenList(err);
-    *err = strdup("screen sharing needs macOS 12.3 or later");
+    *err = strdup("screen sharing isn't available on this device yet");
     return NULL;
 }
-
-API_AVAILABLE(macos(12.3))
-@interface QVScreenOutput : NSObject <SCStreamOutput, SCStreamDelegate>
-@property(atomic) uintptr_t handle;
-@end
-
-@implementation QVScreenOutput
-- (void)stream:(SCStream *)stream didOutputSampleBuffer:(CMSampleBufferRef)sb ofType:(SCStreamOutputType)type {
-    if (type != SCStreamOutputTypeScreen || !CMSampleBufferIsValid(sb)) return;
-    CFArrayRef atts = CMSampleBufferGetSampleAttachmentsArray(sb, false);
-    if (atts == NULL || CFArrayGetCount(atts) == 0) return;
-    NSDictionary *info = (__bridge NSDictionary *)CFArrayGetValueAtIndex(atts, 0);
-    NSNumber *status = info[SCStreamFrameInfoStatus];
-    // Idle = nothing changed since the last frame: no new image, nothing to
-    // encode. A static screen costs (almost) nothing.
-    if (status == nil || status.integerValue != SCFrameStatusComplete) return;
-    CVImageBufferRef pb = CMSampleBufferGetImageBuffer(sb);
-    if (pb == NULL) return;
-    if (self.handle) qvGoScreenFrame(self.handle, (void *)pb, nowUS());
-}
-- (void)stream:(SCStream *)stream didStopWithError:(NSError *)error {
-    if (self.handle) qvGoScreenStopped(self.handle, (int)error.code, nserr(@"screen capture stopped", error));
-}
-@end
-
-struct qv_screen {
-    void *stream; // SCStream (retained)
-    void *output; // QVScreenOutput (retained)
-    void *queue;  // its sample handler queue (retained)
-};
-
-static qv_screen *screenStart(uint32_t display_id, uint32_t window_id, int width, int height, int fps, int show_cursor,
-                           uintptr_t handle, char **err) API_AVAILABLE(macos(12.3)) {
-    NSError *e = nil;
-    SCShareableContent *c = shareableContent(&e);
-    if (c == nil) {
-        *err = nserr(@"screen capture unavailable", e);
-        return NULL;
-    }
-    SCContentFilter *filter = nil;
-    int nw = 0, nh = 0;
-    if (window_id) {
-        for (SCWindow *w in c.windows) {
-            if (w.windowID == window_id) {
-                filter = [[SCContentFilter alloc] initWithDesktopIndependentWindow:w];
-                CGFloat scale = NSScreen.mainScreen.backingScaleFactor;
-                nw = (int)(w.frame.size.width * scale);
-                nh = (int)(w.frame.size.height * scale);
-            }
-        }
-    } else {
-        CGDirectDisplayID want = display_id ? display_id : CGMainDisplayID();
-        for (SCDisplay *d in c.displays) {
-            if (d.displayID == want) {
-                filter = [[SCContentFilter alloc] initWithDisplay:d excludingWindows:@[]];
-                displayPixels(d.displayID, &nw, &nh);
-            }
-        }
-    }
-    if (filter == nil) {
-        *err = strdup("no such display or window");
-        return NULL;
-    }
-    if (width <= 0 || height <= 0) {
-        width = nw;
-        height = nh;
-    }
-    SCStreamConfiguration *cfg = [[SCStreamConfiguration alloc] init];
-    cfg.width = (size_t)(width & ~1);
-    cfg.height = (size_t)(height & ~1);
-    cfg.minimumFrameInterval = CMTimeMake(1, fps > 0 ? fps : 15);
-    cfg.pixelFormat = kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange; // what the encoder wants
-    cfg.showsCursor = show_cursor ? YES : NO;
-    cfg.queueDepth = 5;
-    cfg.scalesToFit = YES;
-
-    QVScreenOutput *out = [[QVScreenOutput alloc] init];
-    out.handle = handle;
-    SCStream *stream = [[SCStream alloc] initWithFilter:filter configuration:cfg delegate:out];
-    dispatch_queue_t q = dispatch_queue_create("quicvideo.screen", DISPATCH_QUEUE_SERIAL);
-    if (![stream addStreamOutput:out type:SCStreamOutputTypeScreen sampleHandlerQueue:q error:&e]) {
-        *err = nserr(@"addStreamOutput failed", e);
-        return NULL;
-    }
-    __block NSError *startErr = nil;
-    dispatch_semaphore_t sem = dispatch_semaphore_create(0);
-    [stream startCaptureWithCompletionHandler:^(NSError *se) {
-      startErr = se;
-      dispatch_semaphore_signal(sem);
-    }];
-    dispatch_semaphore_wait(sem, dispatch_time(DISPATCH_TIME_NOW, 10 * NSEC_PER_SEC));
-    if (startErr) {
-        *err = nserr(@"starting screen capture failed", startErr);
-        return NULL;
-    }
-    qv_screen *s = calloc(1, sizeof(*s));
-    s->stream = (__bridge_retained void *)stream;
-    s->output = (__bridge_retained void *)out;
-    s->queue = (__bridge_retained void *)q;
-    return s;
-}
-
 qv_screen *qv_screen_start(uint32_t display_id, uint32_t window_id, int width, int height, int fps, int show_cursor,
                            uintptr_t handle, char **err) {
-    if (@available(macOS 12.3, *)) return screenStart(display_id, window_id, width, height, fps, show_cursor, handle, err);
-    *err = strdup("screen sharing needs macOS 12.3 or later");
+    *err = strdup("screen sharing isn't available on this device yet");
     return NULL;
 }
-
-static void screenStop(qv_screen *s) API_AVAILABLE(macos(12.3)) {
-    if (s == NULL) return;
-    SCStream *stream = (__bridge_transfer SCStream *)s->stream;
-    QVScreenOutput *out = (__bridge_transfer QVScreenOutput *)s->output;
-    out.handle = 0; // our own stop isn't "the share ended"; late frames are dropped
-    dispatch_semaphore_t sem = dispatch_semaphore_create(0);
-    [stream stopCaptureWithCompletionHandler:^(NSError *e) {
-      dispatch_semaphore_signal(sem);
-    }];
-    dispatch_semaphore_wait(sem, dispatch_time(DISPATCH_TIME_NOW, 5 * NSEC_PER_SEC));
-    [stream removeStreamOutput:out type:SCStreamOutputTypeScreen error:nil];
-    // A frame already on the handler queue would call into Go after Stop
-    // deleted its handle: wait for the queue to drain.
-    dispatch_queue_t q = (__bridge_transfer dispatch_queue_t)s->queue;
-    dispatch_sync(q, ^{});
-    out.handle = 0;
-    free(s);
-}
-
-void qv_screen_stop(qv_screen *s) {
-    if (@available(macOS 12.3, *)) screenStop(s); // only ever started on 12.3+
-}
+void qv_screen_stop(qv_screen *s) {}
+#endif
 
 // ---------------------------------------------------------------- camera
 
 static NSArray<AVCaptureDevice *> *cameras(void) {
     NSMutableArray *types = [NSMutableArray arrayWithObject:AVCaptureDeviceTypeBuiltInWideAngleCamera];
+#if TARGET_OS_OSX
     if (@available(macOS 14.0, *)) {
         [types addObject:AVCaptureDeviceTypeExternal];
         [types addObject:AVCaptureDeviceTypeContinuityCamera];
     }
+#else
+    if (@available(iOS 17.0, *)) [types addObject:AVCaptureDeviceTypeExternal]; // USB cameras on iPad
+#endif
     AVCaptureDeviceDiscoverySession *ds =
         [AVCaptureDeviceDiscoverySession discoverySessionWithDeviceTypes:types
                                                                mediaType:AVMediaTypeVideo
                                                                 position:AVCaptureDevicePositionUnspecified];
+#if TARGET_OS_OSX
     return ds.devices;
+#else
+    // A call wants the front camera: list it first (the default picks the
+    // first built-in one).
+    return [ds.devices sortedArrayUsingComparator:^NSComparisonResult(AVCaptureDevice *a, AVCaptureDevice *b) {
+      BOOL fa = a.position == AVCaptureDevicePositionFront, fb = b.position == AVCaptureDevicePositionFront;
+      return fa == fb ? NSOrderedSame : fa ? NSOrderedAscending : NSOrderedDescending;
+    }];
+#endif
 }
 
 // clamshellClosed: the MacBook lid is closed (IOPMrootDomain's
 // AppleClamshellState). Used for the built-in camera before macOS 14,
 // which has no -[AVCaptureDevice isSuspended].
 static BOOL clamshellClosed(void) {
+#if !TARGET_OS_OSX
+    return NO;
+#else
     io_service_t root = IOServiceGetMatchingService(kIOMainPortDefault, IOServiceMatching("IOPMrootDomain"));
     if (!root) return NO;
     CFTypeRef v = IORegistryEntryCreateCFProperty(root, CFSTR("AppleClamshellState"), kCFAllocatorDefault, 0);
@@ -284,6 +121,7 @@ static BOOL clamshellClosed(void) {
     BOOL closed = v && CFGetTypeID(v) == CFBooleanGetTypeID() && CFBooleanGetValue((CFBooleanRef)v);
     if (v) CFRelease(v);
     return closed;
+#endif
 }
 
 char *qv_camera_list(char **err) {
@@ -303,9 +141,10 @@ char *qv_camera_list(char **err) {
             [formats addObject:@{@"width" : @([wh[0] intValue]), @"height" : @([wh[1] intValue]),
                                  @"max_fps" : @((int)round([best[k] doubleValue]))}];
         }
+        NSString *kind = @"external";
+#if TARGET_OS_OSX
         // transportType tells virtual cameras ('virt': OBS, Immersed...) from
         // real ones ('usb ', 'bltn'); iPhones report 'othr'.
-        NSString *kind = @"external";
         int32_t transport = d.transportType;
         if ([d.deviceType isEqualToString:AVCaptureDeviceTypeBuiltInWideAngleCamera] || transport == 'bltn') kind = @"builtin";
         else if (transport == 'virt') kind = @"virtual";
@@ -313,11 +152,16 @@ char *qv_camera_list(char **err) {
         if (@available(macOS 14.0, *)) {
             if ([d.deviceType isEqualToString:AVCaptureDeviceTypeContinuityCamera]) kind = @"continuity";
         }
+#else
+        if ([d.deviceType isEqualToString:AVCaptureDeviceTypeBuiltInWideAngleCamera]) kind = @"builtin";
+#endif
         // A closed MacBook lid suspends the built-in camera: it's still
         // listed (even as the default) but delivers no frames.
         NSString *unavailable = @"";
         BOOL suspended = NO;
+#if TARGET_OS_OSX
         if (@available(macOS 14.0, *)) suspended = d.isSuspended;
+#endif
         if ([kind isEqualToString:@"builtin"] && (suspended || clamshellClosed())) {
             unavailable = @"the built-in camera is off while the lid is closed";
         } else if (suspended) {
@@ -384,6 +228,11 @@ qv_camera *qv_camera_start(const char *unique_id, int width, int height, int fps
         return NULL;
     }
     AVCaptureSession *session = [[AVCaptureSession alloc] init];
+#if !TARGET_OS_OSX
+    // Leave the app's audio session alone: voice runs its own
+    // (voice processing, echo cancellation) and capture has no audio.
+    session.automaticallyConfiguresApplicationAudioSession = NO;
+#endif
     [session beginConfiguration];
     if (![session canAddInput:in]) {
         *err = strdup("cannot use this camera");
@@ -412,6 +261,15 @@ qv_camera *qv_camera_start(const char *unique_id, int width, int height, int fps
         return NULL;
     }
     [session addOutput:vo];
+#if !TARGET_OS_OSX
+    // Upright frames for a phone held in portrait.
+    AVCaptureConnection *conn = [vo connectionWithMediaType:AVMediaTypeVideo];
+    if (@available(iOS 17.0, *)) {
+        if ([conn isVideoRotationAngleSupported:90]) conn.videoRotationAngle = 90;
+    } else if (conn.isVideoOrientationSupported) {
+        conn.videoOrientation = AVCaptureVideoOrientationPortrait;
+    }
+#endif
     [session commitConfiguration];
     [session startRunning];
     if (!session.running) {
@@ -434,12 +292,25 @@ qv_camera *qv_camera_start(const char *unique_id, int width, int height, int fps
                                uintptr_t h = wout.handle;
                                if (h) qvGoCameraStopped(h, strdup("the camera was disconnected"));
                              }];
+#if !TARGET_OS_OSX
+    // iOS takes the camera away when the app goes to the background, or
+    // for another app's video: the share ends (turn it on again after).
+    id pausedTok = [nc addObserverForName:AVCaptureSessionWasInterruptedNotification object:session queue:nil
+                               usingBlock:^(NSNotification *n) {
+                                 uintptr_t h = wout.handle;
+                                 if (h) qvGoCameraStopped(h, strdup("the camera was interrupted (app in the background, or in use)"));
+                               }];
+#endif
     qv_camera *c = calloc(1, sizeof(*c));
     c->session = (__bridge_retained void *)session;
     c->output = (__bridge_retained void *)out;
     c->video = (__bridge_retained void *)vo;
     c->queue = (__bridge_retained void *)q;
+#if TARGET_OS_OSX
     c->observers = (__bridge_retained void *)@[ errTok, goneTok ];
+#else
+    c->observers = (__bridge_retained void *)@[ errTok, goneTok, pausedTok ];
+#endif
     return c;
 }
 
