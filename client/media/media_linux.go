@@ -289,3 +289,6 @@ func newPatternFrame(w, h, n int) *Frame {
 	drawPatternBGRA(unsafe.Slice((*byte)(data), int(stride)*h), int(stride), w, h, n)
 	return wrapFrame(cf)
 }
+
+// SetDeviceOrientation is for Android; here the OS (or nothing) rotates frames.
+func SetDeviceOrientation(int) {}

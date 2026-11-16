@@ -16,6 +16,7 @@ import (
 	"image"
 	"runtime/cgo"
 	"sync"
+	"sync/atomic"
 	"time"
 	"unsafe"
 )
@@ -99,7 +100,7 @@ func ListCameras() ([]Camera, error) {
 			if (c.Facing == 0) != front {
 				continue
 			}
-			cam := Camera{ID: c.ID, Name: c.Name, Kind: CameraKind(c.Kind)}
+			cam := Camera{ID: c.ID, Name: c.Name, Kind: CameraKind(c.Kind), Facing: [...]string{"front", "back", ""}[min(max(c.Facing, 0), 2)]}
 			for _, f := range c.Formats {
 				cam.Formats = append(cam.Formats, CameraFormat{Width: f.Width, Height: f.Height, MaxFPS: f.MaxFPS})
 			}
@@ -115,7 +116,8 @@ type acamSource struct {
 	handle   cgo.Handle
 	push     func(CapturedFrame)
 	fps      int
-	rotation int // degrees clockwise to upright (the sensor orientation)
+	rotation int // the sensor's orientation (degrees clockwise)
+	front    bool
 
 	mu      sync.Mutex
 	w, h    int
@@ -171,7 +173,7 @@ func StartCamera(o CameraOptions, push func(CapturedFrame)) (Source, error) {
 			best, w, h = d, f.Width, f.Height
 		}
 	}
-	s := &acamSource{push: push, fps: o.FPS, rotation: pick.Orientation % 360, ended: newEnded()}
+	s := &acamSource{push: push, fps: o.FPS, rotation: pick.Orientation % 360, front: pick.Facing == 0, ended: newEnded()}
 	s.handle = cgo.NewHandle(s)
 	id := C.CString(pick.ID)
 	defer C.free(unsafe.Pointer(id))
@@ -190,6 +192,19 @@ func StartCamera(o CameraOptions, push func(CapturedFrame)) (Source, error) {
 }
 
 var errPermission = errors.New("media: camera permission denied")
+
+// deviceOrientation is how far the phone is turned clockwise from upright
+// portrait (0, 90, 180, 270), set by the app from its orientation
+// listener (SetDeviceOrientation); 0 when it doesn't.
+var deviceOrientation atomic.Int32
+
+// SetDeviceOrientation tells the camera how the phone is held (degrees
+// clockwise from portrait, any value: rounded to the nearest quarter
+// turn), so a phone turned on its side still sends upright video.
+func SetDeviceOrientation(deg int) {
+	deg = ((deg % 360) + 360) % 360
+	deviceOrientation.Store(int32(((deg + 45) / 90 * 90) % 360))
+}
 
 func cameraPermissionError(p Permission) error {
 	return &PermissionError{What: "Camera", State: p, Help: "allow it in Settings → Apps → Boson → Permissions"}
@@ -224,7 +239,7 @@ func qvGoACamFrame(h C.uintptr_t, y *C.uint8_t, ystride C.int, u, v *C.uint8_t, 
 	uvLen := uvs*(hh/2-1) + (w/2-1)*uvp + 1
 	uPlane := unsafe.Slice((*byte)(unsafe.Pointer(u)), uvLen)
 	vPlane := unsafe.Slice((*byte)(unsafe.Pointer(v)), uvLen)
-	pic := yuvToNV12Rotated(yPlane, ys, uPlane, vPlane, uvs, uvp, w, hh, s.rotation)
+	pic := yuvToNV12Rotated(yPlane, ys, uPlane, vPlane, uvs, uvp, w, hh, uprightRotation(s.rotation, int(deviceOrientation.Load()), s.front))
 	s.mu.Lock()
 	if s.stopped {
 		s.mu.Unlock()

@@ -5,6 +5,9 @@
 #import <CoreGraphics/CoreGraphics.h>
 #import <CoreMedia/CoreMedia.h>
 #import <Foundation/Foundation.h>
+#if !TARGET_OS_OSX
+#import <UIKit/UIKit.h>
+#endif
 #if TARGET_OS_OSX
 #import <IOKit/IOKitLib.h>
 #import <AppKit/AppKit.h>
@@ -167,14 +170,22 @@ char *qv_camera_list(char **err) {
         } else if (suspended) {
             unavailable = @"the camera is suspended";
         }
+        NSString *facing = d.position == AVCaptureDevicePositionFront ? @"front"
+                           : d.position == AVCaptureDevicePositionBack ? @"back" : @"";
         [out addObject:@{@"id" : d.uniqueID, @"name" : d.localizedName, @"kind" : kind, @"formats" : formats,
-                         @"unavailable" : unavailable}];
+                         @"unavailable" : unavailable, @"facing" : facing}];
     }
     return jsonString(out);
 }
 
 @interface QVCameraOutput : NSObject <AVCaptureVideoDataOutputSampleBufferDelegate>
 @property(atomic) uintptr_t handle;
+#if !TARGET_OS_OSX
+// Follows how the phone is held, so the picture is sent upright.
+@property(nonatomic, weak) AVCaptureConnection *conn;
+@property(nonatomic, strong) id rotator;   // AVCaptureDeviceRotationCoordinator (iOS 17+)
+@property(nonatomic, strong) id orientTok; // UIDeviceOrientationDidChange observer (iOS 16)
+#endif
 @end
 
 @implementation QVCameraOutput
@@ -184,7 +195,34 @@ char *qv_camera_list(char **err) {
     CVImageBufferRef pb = CMSampleBufferGetImageBuffer(sb);
     if (pb && self.handle) qvGoCameraFrame(self.handle, (void *)pb, nowUS());
 }
+#if !TARGET_OS_OSX
+- (void)observeValueForKeyPath:(NSString *)keyPath ofObject:(id)object change:(NSDictionary *)change context:(void *)context {
+    if (@available(iOS 17.0, *)) {
+        CGFloat a = ((AVCaptureDeviceRotationCoordinator *)object).videoRotationAngleForHorizonLevelCapture;
+        AVCaptureConnection *c = self.conn;
+        if (c && [c isVideoRotationAngleSupported:a]) c.videoRotationAngle = a;
+    }
+}
+#endif
 @end
+
+#if !TARGET_OS_OSX
+static NSString *const kHorizonAngle = @"videoRotationAngleForHorizonLevelCapture";
+
+// iOS 16: the device's orientation as a capture orientation (the landscape
+// names are swapped between the two: the device's is where the home
+// button side points, the capture's where the top of the picture goes).
+static void applyDeviceOrientation(AVCaptureConnection *c) {
+    if (!c.isVideoOrientationSupported) return;
+    switch (UIDevice.currentDevice.orientation) {
+    case UIDeviceOrientationPortrait: c.videoOrientation = AVCaptureVideoOrientationPortrait; break;
+    case UIDeviceOrientationPortraitUpsideDown: c.videoOrientation = AVCaptureVideoOrientationPortraitUpsideDown; break;
+    case UIDeviceOrientationLandscapeLeft: c.videoOrientation = AVCaptureVideoOrientationLandscapeRight; break;
+    case UIDeviceOrientationLandscapeRight: c.videoOrientation = AVCaptureVideoOrientationLandscapeLeft; break;
+    default: break; // face up or down: keep the last one
+    }
+}
+#endif
 
 struct qv_camera {
     void *session;   // AVCaptureSession (retained)
@@ -262,12 +300,36 @@ qv_camera *qv_camera_start(const char *unique_id, int width, int height, int fps
     }
     [session addOutput:vo];
 #if !TARGET_OS_OSX
-    // Upright frames for a phone held in portrait.
     AVCaptureConnection *conn = [vo connectionWithMediaType:AVMediaTypeVideo];
+    // What's sent is never mirrored, front camera included, so text held up
+    // reads right for the others. (The app mirrors only its own preview of
+    // the front camera, as FaceTime does.)
+    if (conn.isVideoMirroringSupported) {
+        conn.automaticallyAdjustsVideoMirroring = NO;
+        conn.videoMirrored = NO;
+    }
+    // Upright for however the phone is held (portrait, either landscape,
+    // upside down), the front camera's angles included; it follows turns.
+    out.conn = conn;
     if (@available(iOS 17.0, *)) {
-        if ([conn isVideoRotationAngleSupported:90]) conn.videoRotationAngle = 90;
-    } else if (conn.isVideoOrientationSupported) {
-        conn.videoOrientation = AVCaptureVideoOrientationPortrait;
+        AVCaptureDeviceRotationCoordinator *rc = [[AVCaptureDeviceRotationCoordinator alloc] initWithDevice:dev previewLayer:nil];
+        out.rotator = rc;
+        CGFloat a = rc.videoRotationAngleForHorizonLevelCapture;
+        if ([conn isVideoRotationAngleSupported:a]) conn.videoRotationAngle = a;
+        [rc addObserver:out forKeyPath:kHorizonAngle options:NSKeyValueObservingOptionNew context:NULL];
+    } else {
+        if (conn.isVideoOrientationSupported) conn.videoOrientation = AVCaptureVideoOrientationPortrait;
+        dispatch_async(dispatch_get_main_queue(), ^{
+          [UIDevice.currentDevice beginGeneratingDeviceOrientationNotifications];
+          applyDeviceOrientation(conn);
+        });
+        __weak AVCaptureConnection *wconn = conn;
+        out.orientTok = [[NSNotificationCenter defaultCenter] addObserverForName:UIDeviceOrientationDidChangeNotification object:nil
+                                                                           queue:[NSOperationQueue mainQueue]
+                                                                      usingBlock:^(NSNotification *n) {
+                                                                        AVCaptureConnection *c = wconn;
+                                                                        if (c) applyDeviceOrientation(c);
+                                                                      }];
     }
 #endif
     [session commitConfiguration];
@@ -326,6 +388,17 @@ void qv_camera_stop(qv_camera *c) {
     NSArray *observers = (__bridge_transfer NSArray *)c->observers;
     out.handle = 0; // late frames and notifications are dropped from here on
     for (id tok in observers) [[NSNotificationCenter defaultCenter] removeObserver:tok];
+#if !TARGET_OS_OSX
+    if (out.rotator) {
+        [out.rotator removeObserver:out forKeyPath:kHorizonAngle];
+        out.rotator = nil;
+    }
+    if (out.orientTok) {
+        [[NSNotificationCenter defaultCenter] removeObserver:out.orientTok];
+        out.orientTok = nil;
+        dispatch_async(dispatch_get_main_queue(), ^{ [UIDevice.currentDevice endGeneratingDeviceOrientationNotifications]; });
+    }
+#endif
     [session stopRunning];
     [vo setSampleBufferDelegate:nil queue:nil];
     dispatch_sync(q, ^{});

@@ -226,8 +226,8 @@ func ListCameras() ([]Camera, error) {
 	}
 	defer C.free(unsafe.Pointer(js))
 	var v []struct {
-		ID, Name, Kind, Unavailable string
-		Formats                     []struct {
+		ID, Name, Kind, Unavailable, Facing string
+		Formats                             []struct {
 			Width, Height int
 			MaxFPS        int `json:"max_fps"`
 		}
@@ -237,7 +237,7 @@ func ListCameras() ([]Camera, error) {
 	}
 	out := make([]Camera, 0, len(v))
 	for _, c := range v {
-		cam := Camera{ID: c.ID, Name: c.Name, Kind: CameraKind(c.Kind), Unavailable: c.Unavailable}
+		cam := Camera{ID: c.ID, Name: c.Name, Kind: CameraKind(c.Kind), Unavailable: c.Unavailable, Facing: c.Facing}
 		for _, f := range c.Formats {
 			cam.Formats = append(cam.Formats, CameraFormat(f))
 		}

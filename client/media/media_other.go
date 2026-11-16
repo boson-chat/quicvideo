@@ -30,3 +30,6 @@ func ToRGBA(Picture, int) (*image.RGBA, error)                    { return nil, 
 
 // NewPatternSource is macOS-only for now.
 func NewPatternSource(int, int, int, func(CapturedFrame)) (Source, error) { return nil, ErrUnsupported }
+
+// SetDeviceOrientation is for Android; elsewhere the OS rotates frames.
+func SetDeviceOrientation(int) {}
