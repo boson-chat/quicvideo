@@ -1,4 +1,4 @@
-//go:build linux && cgo
+//go:build linux && !android && cgo
 
 // Capture on Linux: libavdevice (V4L2 cameras, x11grab) and PipeWire
 // (screens/windows from the xdg-desktop-portal ScreenCast session).

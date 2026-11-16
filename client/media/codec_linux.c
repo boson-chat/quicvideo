@@ -1,4 +1,4 @@
-//go:build linux && cgo
+//go:build linux && !android && cgo
 
 // H.264 encode (NVENC / VA-API / openh264 / opt-in x264) and decode
 // (libavcodec) for package media on Linux.

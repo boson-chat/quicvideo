@@ -1,4 +1,4 @@
-//go:build !darwin && !(linux && cgo) && !(windows && cgo)
+//go:build !darwin && !(linux && !android && cgo) && !(android && cgo) && !(windows && cgo)
 
 package media
 
