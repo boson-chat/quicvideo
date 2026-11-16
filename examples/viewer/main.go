@@ -109,6 +109,9 @@ func printDevices() {
 		if c.ID == def.ID {
 			mark = " (default)"
 		}
+		if c.Unavailable != "" {
+			mark += " (unavailable: " + c.Unavailable + ")"
+		}
 		fmt.Printf("camera %q: %s, %s%s [%s]\n", c.ID, c.Name, c.Kind, mark, strings.Join(fs, " "))
 	}
 }
@@ -228,11 +231,11 @@ var (
 
 func (u *ui) frame(gtx layout.Context, ctx context.Context, s *session, w *app.Window) []tileView {
 	paint.Fill(gtx.Ops, bgColor)
-	camName, screenName := s.sharing()
+	cam, scr := s.sharing()
 
 	// Controls.
 	if u.camBtn.Clicked(gtx) {
-		if camName != "" {
+		if cam.active() { // on, or starting: this cancels the start
 			go s.StopCamera()
 		} else {
 			s.StartCamera(ctx, *cameraID, *pattern)
@@ -261,7 +264,7 @@ func (u *ui) frame(gtx layout.Context, ctx context.Context, s *session, w *app.W
 	var views []tileView
 	layout.Flex{Axis: layout.Vertical}.Layout(gtx,
 		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-			return u.bar(gtx, s, camName, screenName)
+			return u.bar(gtx, s, cam, scr)
 		}),
 		layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
 			size := gtx.Constraints.Max
@@ -279,7 +282,29 @@ func (u *ui) frame(gtx layout.Context, ctx context.Context, s *session, w *app.W
 	return views
 }
 
-func (u *ui) bar(gtx layout.Context, s *session, camName, screenName string) layout.Dimensions {
+// barLabels are the control buttons' labels (stop "" = no stop button).
+type barLabels struct{ camera, screen, stop string }
+
+func labelsFor(cam, scr shareState) barLabels {
+	l := barLabels{camera: "Camera on", screen: "Share screen"}
+	switch {
+	case cam.Starting:
+		l.camera = "Starting camera… (cancel)"
+	case cam.active():
+		l.camera = "Camera off"
+	}
+	switch {
+	case scr.Starting:
+		l.screen = "Change screen"
+		l.stop = "Starting screen share… (cancel)"
+	case scr.active():
+		l.screen = "Change screen"
+		l.stop = "Stop sharing"
+	}
+	return l
+}
+
+func (u *ui) bar(gtx layout.Context, s *session, cam, scr shareState) layout.Dimensions {
 	return layout.Background{}.Layout(gtx,
 		func(gtx layout.Context) layout.Dimensions {
 			paint.FillShape(gtx.Ops, barColor, clip.Rect{Max: gtx.Constraints.Min}.Op())
@@ -287,22 +312,15 @@ func (u *ui) bar(gtx layout.Context, s *session, camName, screenName string) lay
 		},
 		func(gtx layout.Context) layout.Dimensions {
 			return layout.UniformInset(unit.Dp(8)).Layout(gtx, func(gtx layout.Context) layout.Dimensions {
-				camLabel := "Camera on"
-				if camName != "" {
-					camLabel = "Camera off"
-				}
-				shareLabel := "Share screen"
-				if screenName != "" {
-					shareLabel = "Change screen"
-				}
+				l := labelsFor(cam, scr)
 				items := []layout.FlexChild{
-					layout.Rigid(material.Button(u.th, &u.camBtn, camLabel).Layout),
+					layout.Rigid(material.Button(u.th, &u.camBtn, l.camera).Layout),
 					layout.Rigid(layout.Spacer{Width: unit.Dp(8)}.Layout),
-					layout.Rigid(material.Button(u.th, &u.screenBtn, shareLabel).Layout),
+					layout.Rigid(material.Button(u.th, &u.screenBtn, l.screen).Layout),
 				}
-				if screenName != "" {
+				if l.stop != "" {
 					items = append(items, layout.Rigid(layout.Spacer{Width: unit.Dp(8)}.Layout),
-						layout.Rigid(material.Button(u.th, &u.stopBtn, "Stop sharing").Layout))
+						layout.Rigid(material.Button(u.th, &u.stopBtn, l.stop).Layout))
 				}
 				s.mu.Lock()
 				status := s.status

@@ -10,6 +10,7 @@ import "C"
 
 import (
 	"encoding/json"
+	"fmt"
 	"runtime/cgo"
 	"sync"
 	"time"
@@ -219,8 +220,8 @@ func ListCameras() ([]Camera, error) {
 	}
 	defer C.free(unsafe.Pointer(js))
 	var v []struct {
-		ID, Name, Kind string
-		Formats        []struct {
+		ID, Name, Kind, Unavailable string
+		Formats                     []struct {
 			Width, Height int
 			MaxFPS        int `json:"max_fps"`
 		}
@@ -230,7 +231,7 @@ func ListCameras() ([]Camera, error) {
 	}
 	out := make([]Camera, 0, len(v))
 	for _, c := range v {
-		cam := Camera{ID: c.ID, Name: c.Name, Kind: CameraKind(c.Kind)}
+		cam := Camera{ID: c.ID, Name: c.Name, Kind: CameraKind(c.Kind), Unavailable: c.Unavailable}
 		for _, f := range c.Formats {
 			cam.Formats = append(cam.Formats, CameraFormat(f))
 		}
@@ -248,13 +249,27 @@ func StartCamera(o CameraOptions, push func(CapturedFrame)) (Source, error) {
 	if o.Width <= 0 || o.Height <= 0 {
 		o.Width, o.Height = 1280, 720
 	}
-	if o.ID == "" {
-		// The system default is often a virtual camera (Immersed, OBS...);
-		// prefer a real built-in one.
-		if cams, err := ListCameras(); err == nil {
-			if c, ok := DefaultCamera(cams); ok {
-				o.ID = c.ID
+	// The system default is often a virtual camera (Immersed, OBS...) or a
+	// closed lid's built-in one; pick ourselves, and fail fast (instead of
+	// a 10 s wait for pictures that never come) on a camera that can't
+	// deliver.
+	if cams, err := ListCameras(); err == nil {
+		var pick Camera
+		var ok bool
+		if o.ID == "" {
+			pick, ok = DefaultCamera(cams)
+		} else {
+			for _, c := range cams {
+				if c.ID == o.ID {
+					pick, ok = c, true
+				}
 			}
+		}
+		if ok {
+			if pick.Unavailable != "" {
+				return nil, fmt.Errorf("media: %s: %s", pick.Name, pick.Unavailable)
+			}
+			o.ID = pick.ID
 		}
 	}
 	if o.FPS <= 0 {

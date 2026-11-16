@@ -1,4 +1,5 @@
 // ScreenCaptureKit and AVFoundation capture, and TCC permission checks.
+#import <IOKit/IOKitLib.h>
 #import <AVFoundation/AVFoundation.h>
 #import <AppKit/AppKit.h>
 #import <CoreGraphics/CoreGraphics.h>
@@ -246,6 +247,19 @@ static NSArray<AVCaptureDevice *> *cameras(void) {
     return ds.devices;
 }
 
+// clamshellClosed: the MacBook lid is closed (IOPMrootDomain's
+// AppleClamshellState). Used for the built-in camera before macOS 14,
+// which has no -[AVCaptureDevice isSuspended].
+static BOOL clamshellClosed(void) {
+    io_service_t root = IOServiceGetMatchingService(kIOMainPortDefault, IOServiceMatching("IOPMrootDomain"));
+    if (!root) return NO;
+    CFTypeRef v = IORegistryEntryCreateCFProperty(root, CFSTR("AppleClamshellState"), kCFAllocatorDefault, 0);
+    IOObjectRelease(root);
+    BOOL closed = v && CFGetTypeID(v) == CFBooleanGetTypeID() && CFBooleanGetValue((CFBooleanRef)v);
+    if (v) CFRelease(v);
+    return closed;
+}
+
 char *qv_camera_list(char **err) {
     NSMutableArray *out = [NSMutableArray array];
     for (AVCaptureDevice *d in cameras()) {
@@ -273,7 +287,18 @@ char *qv_camera_list(char **err) {
         if (@available(macOS 14.0, *)) {
             if ([d.deviceType isEqualToString:AVCaptureDeviceTypeContinuityCamera]) kind = @"continuity";
         }
-        [out addObject:@{@"id" : d.uniqueID, @"name" : d.localizedName, @"kind" : kind, @"formats" : formats}];
+        // A closed MacBook lid suspends the built-in camera: it's still
+        // listed (even as the default) but delivers no frames.
+        NSString *unavailable = @"";
+        BOOL suspended = NO;
+        if (@available(macOS 14.0, *)) suspended = d.isSuspended;
+        if ([kind isEqualToString:@"builtin"] && (suspended || clamshellClosed())) {
+            unavailable = @"the built-in camera is off while the lid is closed";
+        } else if (suspended) {
+            unavailable = @"the camera is suspended";
+        }
+        [out addObject:@{@"id" : d.uniqueID, @"name" : d.localizedName, @"kind" : kind, @"formats" : formats,
+                         @"unavailable" : unavailable}];
     }
     return jsonString(out);
 }
