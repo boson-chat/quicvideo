@@ -128,7 +128,7 @@ func eventually(t *testing.T, what string, ok func() bool) {
 	}
 }
 
-func (r *rig) camera() string { c, _ := r.s.sharing(); return c }
+func (r *rig) camera() string { c, _ := r.s.sharing(); return c.Name }
 
 // live waits for a share to be published and frames to flow.
 func (r *rig) live(i int) *fakePub {
@@ -271,5 +271,47 @@ func TestNoStartAfterClose(t *testing.T) {
 	})
 	if called {
 		t.Fatal("a source was started after Close")
+	}
+}
+
+// While the camera is starting the button says so (and that clicking
+// cancels); a user took "Camera on" during a slow start as "off" and
+// cancelled it.
+func TestStartingStateAndLabels(t *testing.T) {
+	r := newRig(t)
+	r.start(controlpb.TrackKind_CAMERA, 300*time.Millisecond)
+	eventually(t, "camera starting", func() bool { c, _ := r.s.sharing(); return c.Starting })
+	cam, scr := r.s.sharing()
+	if l := labelsFor(cam, scr); l.camera != "Starting camera… (cancel)" || l.stop != "" {
+		t.Fatalf("starting: %+v", l)
+	}
+	r.live(0)
+	cam, scr = r.s.sharing()
+	if cam.Starting || labelsFor(cam, scr).camera != "Camera off" {
+		t.Fatalf("on: %+v %+v", cam, labelsFor(cam, scr))
+	}
+	r.s.StopCamera()
+	cam, scr = r.s.sharing()
+	if labelsFor(cam, scr).camera != "Camera on" {
+		t.Fatalf("off: %+v", labelsFor(cam, scr))
+	}
+}
+
+func TestLabels(t *testing.T) {
+	off := shareState{}
+	on := shareState{Name: "x"}
+	starting := shareState{Name: "x", Starting: true}
+	for _, c := range []struct {
+		cam, scr shareState
+		want     barLabels
+	}{
+		{off, off, barLabels{"Camera on", "Share screen", ""}},
+		{starting, off, barLabels{"Starting camera… (cancel)", "Share screen", ""}},
+		{on, on, barLabels{"Camera off", "Change screen", "Stop sharing"}},
+		{off, starting, barLabels{"Camera on", "Change screen", "Starting screen share… (cancel)"}},
+	} {
+		if got := labelsFor(c.cam, c.scr); got != c.want {
+			t.Errorf("cam %+v scr %+v: got %+v, want %+v", c.cam, c.scr, got, c.want)
+		}
 	}
 }

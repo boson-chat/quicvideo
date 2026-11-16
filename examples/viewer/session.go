@@ -397,18 +397,29 @@ func (s *session) slot(kind controlpb.TrackKind) *shareSlot {
 	return &s.screen
 }
 
-// sharing names the camera/screen share, including one still starting
-// (the UI shows "off" for it, and clicking cancels the start).
-func (s *session) sharing() (camera, screen string) {
+// shareState is a share as the UI shows it: off (Name ""), starting, or on.
+type shareState struct {
+	Name     string
+	Starting bool
+}
+
+func (st shareState) active() bool { return st.Name != "" }
+
+// sharing reports the camera and screen shares, including one still
+// starting (its button cancels the start).
+func (s *session) sharing() (camera, screen shareState) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	name := func(sl *shareSlot) string {
+	state := func(sl *shareSlot) shareState {
 		if sl.cur != nil {
-			return sl.cur.name
+			return shareState{Name: sl.cur.name}
 		}
-		return sl.pending
+		if sl.pending != "" {
+			return shareState{Name: sl.pending, Starting: true}
+		}
+		return shareState{}
 	}
-	return name(&s.camera), name(&s.screen)
+	return state(&s.camera), state(&s.screen)
 }
 
 // StartCamera starts publishing a camera (cameraID "" = the default:

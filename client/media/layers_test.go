@@ -95,4 +95,17 @@ func TestDefaultCamera(t *testing.T) {
 	if _, ok := DefaultCamera(nil); ok {
 		t.Fatal("no cameras")
 	}
+
+	// Lid closed: the built-in is skipped for the next best one, and only
+	// picked (to fail with its reason) when it's the only camera.
+	closed := append([]Camera(nil), cams...)
+	closed[3].Unavailable = LidClosedReason
+	for n, want := range map[int]string{4: "u", 3: "u", 2: "p", 1: "v"} {
+		if c, _ := DefaultCamera(closed[:n]); c.ID != want {
+			t.Errorf("lid closed, first %d cameras: got %q, want %q", n, c.ID, want)
+		}
+	}
+	if c, ok := DefaultCamera(closed[3:]); !ok || c.ID != "f" || c.Unavailable == "" {
+		t.Fatalf("only the closed built-in: got %+v", c)
+	}
 }

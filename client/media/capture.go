@@ -35,12 +35,22 @@ type Camera struct {
 	Name    string
 	Kind    CameraKind
 	Formats []CameraFormat
+	// Unavailable says why the camera can't deliver pictures right now
+	// ("" = it can): e.g. a MacBook's built-in camera with the lid closed,
+	// which the OS still lists.
+	Unavailable string
 }
+
+// LidClosedReason is a closed MacBook's built-in camera's Unavailable.
+const LidClosedReason = "the built-in camera is off while the lid is closed"
 
 // DefaultCamera picks the camera to use when none is chosen: built-in
 // first, then a physical external webcam, then Continuity (iPhone), and a
 // virtual camera only if there's nothing else. The OS default is often a
 // virtual camera, which is rarely what someone joining a call wants.
+// Unavailable cameras (a closed lid's built-in) come last: one is only
+// returned when there's nothing else, and starting it fails with its
+// reason.
 func DefaultCamera(cams []Camera) (Camera, bool) {
 	rank := func(k CameraKind) int {
 		switch k {
@@ -53,9 +63,15 @@ func DefaultCamera(cams []Camera) (Camera, bool) {
 		}
 		return 3
 	}
+	score := func(c Camera) int {
+		if c.Unavailable != "" {
+			return 10 + rank(c.Kind)
+		}
+		return rank(c.Kind)
+	}
 	best := -1
 	for i, c := range cams {
-		if best < 0 || rank(c.Kind) < rank(cams[best].Kind) {
+		if best < 0 || score(c) < score(cams[best]) {
 			best = i
 		}
 	}
