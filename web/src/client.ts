@@ -10,7 +10,7 @@ import {
   type SubscriptionState,
   type Track,
   TrackKind,
-} from "./gen/control_pb";
+} from "./gen/quicvideo/v1/control_pb";
 import { avcCodec, type LayerSpec } from "./layers";
 import { ByteReader, encodeControl, frameHeader, groupHeader, readControl, readFrame } from "./wire";
 

@@ -7,7 +7,7 @@
 // versions:
 // 	protoc-gen-go v1.36.12
 // 	protoc        v7.36.2
-// source: control.proto
+// source: quicvideo/v1/control.proto
 
 package controlpb
 
@@ -59,11 +59,11 @@ func (x TrackKind) String() string {
 }
 
 func (TrackKind) Descriptor() protoreflect.EnumDescriptor {
-	return file_control_proto_enumTypes[0].Descriptor()
+	return file_quicvideo_v1_control_proto_enumTypes[0].Descriptor()
 }
 
 func (TrackKind) Type() protoreflect.EnumType {
-	return &file_control_proto_enumTypes[0]
+	return &file_quicvideo_v1_control_proto_enumTypes[0]
 }
 
 func (x TrackKind) Number() protoreflect.EnumNumber {
@@ -72,7 +72,7 @@ func (x TrackKind) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use TrackKind.Descriptor instead.
 func (TrackKind) EnumDescriptor() ([]byte, []int) {
-	return file_control_proto_rawDescGZIP(), []int{0}
+	return file_quicvideo_v1_control_proto_rawDescGZIP(), []int{0}
 }
 
 type Error_Code int32
@@ -132,11 +132,11 @@ func (x Error_Code) String() string {
 }
 
 func (Error_Code) Descriptor() protoreflect.EnumDescriptor {
-	return file_control_proto_enumTypes[1].Descriptor()
+	return file_quicvideo_v1_control_proto_enumTypes[1].Descriptor()
 }
 
 func (Error_Code) Type() protoreflect.EnumType {
-	return &file_control_proto_enumTypes[1]
+	return &file_quicvideo_v1_control_proto_enumTypes[1]
 }
 
 func (x Error_Code) Number() protoreflect.EnumNumber {
@@ -145,7 +145,7 @@ func (x Error_Code) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use Error_Code.Descriptor instead.
 func (Error_Code) EnumDescriptor() ([]byte, []int) {
-	return file_control_proto_rawDescGZIP(), []int{3, 0}
+	return file_quicvideo_v1_control_proto_rawDescGZIP(), []int{3, 0}
 }
 
 type ControlMessage struct {
@@ -182,7 +182,7 @@ type ControlMessage struct {
 
 func (x *ControlMessage) Reset() {
 	*x = ControlMessage{}
-	mi := &file_control_proto_msgTypes[0]
+	mi := &file_quicvideo_v1_control_proto_msgTypes[0]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -194,7 +194,7 @@ func (x *ControlMessage) String() string {
 func (*ControlMessage) ProtoMessage() {}
 
 func (x *ControlMessage) ProtoReflect() protoreflect.Message {
-	mi := &file_control_proto_msgTypes[0]
+	mi := &file_quicvideo_v1_control_proto_msgTypes[0]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -207,7 +207,7 @@ func (x *ControlMessage) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ControlMessage.ProtoReflect.Descriptor instead.
 func (*ControlMessage) Descriptor() ([]byte, []int) {
-	return file_control_proto_rawDescGZIP(), []int{0}
+	return file_quicvideo_v1_control_proto_rawDescGZIP(), []int{0}
 }
 
 func (x *ControlMessage) GetMsg() isControlMessage_Msg {
@@ -582,7 +582,7 @@ type Hello struct {
 
 func (x *Hello) Reset() {
 	*x = Hello{}
-	mi := &file_control_proto_msgTypes[1]
+	mi := &file_quicvideo_v1_control_proto_msgTypes[1]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -594,7 +594,7 @@ func (x *Hello) String() string {
 func (*Hello) ProtoMessage() {}
 
 func (x *Hello) ProtoReflect() protoreflect.Message {
-	mi := &file_control_proto_msgTypes[1]
+	mi := &file_quicvideo_v1_control_proto_msgTypes[1]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -607,7 +607,7 @@ func (x *Hello) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Hello.ProtoReflect.Descriptor instead.
 func (*Hello) Descriptor() ([]byte, []int) {
-	return file_control_proto_rawDescGZIP(), []int{1}
+	return file_quicvideo_v1_control_proto_rawDescGZIP(), []int{1}
 }
 
 func (x *Hello) GetToken() string {
@@ -649,7 +649,7 @@ type Welcome struct {
 
 func (x *Welcome) Reset() {
 	*x = Welcome{}
-	mi := &file_control_proto_msgTypes[2]
+	mi := &file_quicvideo_v1_control_proto_msgTypes[2]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -661,7 +661,7 @@ func (x *Welcome) String() string {
 func (*Welcome) ProtoMessage() {}
 
 func (x *Welcome) ProtoReflect() protoreflect.Message {
-	mi := &file_control_proto_msgTypes[2]
+	mi := &file_quicvideo_v1_control_proto_msgTypes[2]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -674,7 +674,7 @@ func (x *Welcome) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Welcome.ProtoReflect.Descriptor instead.
 func (*Welcome) Descriptor() ([]byte, []int) {
-	return file_control_proto_rawDescGZIP(), []int{2}
+	return file_quicvideo_v1_control_proto_rawDescGZIP(), []int{2}
 }
 
 func (x *Welcome) GetSessionId() uint32 {
@@ -738,7 +738,7 @@ type Error struct {
 
 func (x *Error) Reset() {
 	*x = Error{}
-	mi := &file_control_proto_msgTypes[3]
+	mi := &file_quicvideo_v1_control_proto_msgTypes[3]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -750,7 +750,7 @@ func (x *Error) String() string {
 func (*Error) ProtoMessage() {}
 
 func (x *Error) ProtoReflect() protoreflect.Message {
-	mi := &file_control_proto_msgTypes[3]
+	mi := &file_quicvideo_v1_control_proto_msgTypes[3]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -763,7 +763,7 @@ func (x *Error) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Error.ProtoReflect.Descriptor instead.
 func (*Error) Descriptor() ([]byte, []int) {
-	return file_control_proto_rawDescGZIP(), []int{3}
+	return file_quicvideo_v1_control_proto_rawDescGZIP(), []int{3}
 }
 
 func (x *Error) GetCode() Error_Code {
@@ -803,7 +803,7 @@ type Join struct {
 
 func (x *Join) Reset() {
 	*x = Join{}
-	mi := &file_control_proto_msgTypes[4]
+	mi := &file_quicvideo_v1_control_proto_msgTypes[4]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -815,7 +815,7 @@ func (x *Join) String() string {
 func (*Join) ProtoMessage() {}
 
 func (x *Join) ProtoReflect() protoreflect.Message {
-	mi := &file_control_proto_msgTypes[4]
+	mi := &file_quicvideo_v1_control_proto_msgTypes[4]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -828,7 +828,7 @@ func (x *Join) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Join.ProtoReflect.Descriptor instead.
 func (*Join) Descriptor() ([]byte, []int) {
-	return file_control_proto_rawDescGZIP(), []int{4}
+	return file_quicvideo_v1_control_proto_rawDescGZIP(), []int{4}
 }
 
 func (x *Join) GetRoom() string {
@@ -846,7 +846,7 @@ type Leave struct {
 
 func (x *Leave) Reset() {
 	*x = Leave{}
-	mi := &file_control_proto_msgTypes[5]
+	mi := &file_quicvideo_v1_control_proto_msgTypes[5]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -858,7 +858,7 @@ func (x *Leave) String() string {
 func (*Leave) ProtoMessage() {}
 
 func (x *Leave) ProtoReflect() protoreflect.Message {
-	mi := &file_control_proto_msgTypes[5]
+	mi := &file_quicvideo_v1_control_proto_msgTypes[5]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -871,7 +871,7 @@ func (x *Leave) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Leave.ProtoReflect.Descriptor instead.
 func (*Leave) Descriptor() ([]byte, []int) {
-	return file_control_proto_rawDescGZIP(), []int{5}
+	return file_quicvideo_v1_control_proto_rawDescGZIP(), []int{5}
 }
 
 type Participant struct {
@@ -885,7 +885,7 @@ type Participant struct {
 
 func (x *Participant) Reset() {
 	*x = Participant{}
-	mi := &file_control_proto_msgTypes[6]
+	mi := &file_quicvideo_v1_control_proto_msgTypes[6]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -897,7 +897,7 @@ func (x *Participant) String() string {
 func (*Participant) ProtoMessage() {}
 
 func (x *Participant) ProtoReflect() protoreflect.Message {
-	mi := &file_control_proto_msgTypes[6]
+	mi := &file_quicvideo_v1_control_proto_msgTypes[6]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -910,7 +910,7 @@ func (x *Participant) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Participant.ProtoReflect.Descriptor instead.
 func (*Participant) Descriptor() ([]byte, []int) {
-	return file_control_proto_rawDescGZIP(), []int{6}
+	return file_quicvideo_v1_control_proto_rawDescGZIP(), []int{6}
 }
 
 func (x *Participant) GetSessionId() uint32 {
@@ -949,7 +949,7 @@ type Layer struct {
 
 func (x *Layer) Reset() {
 	*x = Layer{}
-	mi := &file_control_proto_msgTypes[7]
+	mi := &file_quicvideo_v1_control_proto_msgTypes[7]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -961,7 +961,7 @@ func (x *Layer) String() string {
 func (*Layer) ProtoMessage() {}
 
 func (x *Layer) ProtoReflect() protoreflect.Message {
-	mi := &file_control_proto_msgTypes[7]
+	mi := &file_quicvideo_v1_control_proto_msgTypes[7]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -974,7 +974,7 @@ func (x *Layer) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Layer.ProtoReflect.Descriptor instead.
 func (*Layer) Descriptor() ([]byte, []int) {
-	return file_control_proto_rawDescGZIP(), []int{7}
+	return file_quicvideo_v1_control_proto_rawDescGZIP(), []int{7}
 }
 
 func (x *Layer) GetId() uint32 {
@@ -1025,7 +1025,7 @@ type Track struct {
 
 func (x *Track) Reset() {
 	*x = Track{}
-	mi := &file_control_proto_msgTypes[8]
+	mi := &file_quicvideo_v1_control_proto_msgTypes[8]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1037,7 +1037,7 @@ func (x *Track) String() string {
 func (*Track) ProtoMessage() {}
 
 func (x *Track) ProtoReflect() protoreflect.Message {
-	mi := &file_control_proto_msgTypes[8]
+	mi := &file_quicvideo_v1_control_proto_msgTypes[8]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1050,7 +1050,7 @@ func (x *Track) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Track.ProtoReflect.Descriptor instead.
 func (*Track) Descriptor() ([]byte, []int) {
-	return file_control_proto_rawDescGZIP(), []int{8}
+	return file_quicvideo_v1_control_proto_rawDescGZIP(), []int{8}
 }
 
 func (x *Track) GetTrackId() uint32 {
@@ -1100,7 +1100,7 @@ type RoomState struct {
 
 func (x *RoomState) Reset() {
 	*x = RoomState{}
-	mi := &file_control_proto_msgTypes[9]
+	mi := &file_quicvideo_v1_control_proto_msgTypes[9]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1112,7 +1112,7 @@ func (x *RoomState) String() string {
 func (*RoomState) ProtoMessage() {}
 
 func (x *RoomState) ProtoReflect() protoreflect.Message {
-	mi := &file_control_proto_msgTypes[9]
+	mi := &file_quicvideo_v1_control_proto_msgTypes[9]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1125,7 +1125,7 @@ func (x *RoomState) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RoomState.ProtoReflect.Descriptor instead.
 func (*RoomState) Descriptor() ([]byte, []int) {
-	return file_control_proto_rawDescGZIP(), []int{9}
+	return file_quicvideo_v1_control_proto_rawDescGZIP(), []int{9}
 }
 
 func (x *RoomState) GetRoom() string {
@@ -1165,7 +1165,7 @@ type ParticipantJoined struct {
 
 func (x *ParticipantJoined) Reset() {
 	*x = ParticipantJoined{}
-	mi := &file_control_proto_msgTypes[10]
+	mi := &file_quicvideo_v1_control_proto_msgTypes[10]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1177,7 +1177,7 @@ func (x *ParticipantJoined) String() string {
 func (*ParticipantJoined) ProtoMessage() {}
 
 func (x *ParticipantJoined) ProtoReflect() protoreflect.Message {
-	mi := &file_control_proto_msgTypes[10]
+	mi := &file_quicvideo_v1_control_proto_msgTypes[10]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1190,7 +1190,7 @@ func (x *ParticipantJoined) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ParticipantJoined.ProtoReflect.Descriptor instead.
 func (*ParticipantJoined) Descriptor() ([]byte, []int) {
-	return file_control_proto_rawDescGZIP(), []int{10}
+	return file_quicvideo_v1_control_proto_rawDescGZIP(), []int{10}
 }
 
 func (x *ParticipantJoined) GetParticipant() *Participant {
@@ -1210,7 +1210,7 @@ type ParticipantLeft struct {
 
 func (x *ParticipantLeft) Reset() {
 	*x = ParticipantLeft{}
-	mi := &file_control_proto_msgTypes[11]
+	mi := &file_quicvideo_v1_control_proto_msgTypes[11]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1222,7 +1222,7 @@ func (x *ParticipantLeft) String() string {
 func (*ParticipantLeft) ProtoMessage() {}
 
 func (x *ParticipantLeft) ProtoReflect() protoreflect.Message {
-	mi := &file_control_proto_msgTypes[11]
+	mi := &file_quicvideo_v1_control_proto_msgTypes[11]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1235,7 +1235,7 @@ func (x *ParticipantLeft) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ParticipantLeft.ProtoReflect.Descriptor instead.
 func (*ParticipantLeft) Descriptor() ([]byte, []int) {
-	return file_control_proto_rawDescGZIP(), []int{11}
+	return file_quicvideo_v1_control_proto_rawDescGZIP(), []int{11}
 }
 
 func (x *ParticipantLeft) GetSessionId() uint32 {
@@ -1264,7 +1264,7 @@ type Publish struct {
 
 func (x *Publish) Reset() {
 	*x = Publish{}
-	mi := &file_control_proto_msgTypes[12]
+	mi := &file_quicvideo_v1_control_proto_msgTypes[12]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1276,7 +1276,7 @@ func (x *Publish) String() string {
 func (*Publish) ProtoMessage() {}
 
 func (x *Publish) ProtoReflect() protoreflect.Message {
-	mi := &file_control_proto_msgTypes[12]
+	mi := &file_quicvideo_v1_control_proto_msgTypes[12]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1289,7 +1289,7 @@ func (x *Publish) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Publish.ProtoReflect.Descriptor instead.
 func (*Publish) Descriptor() ([]byte, []int) {
-	return file_control_proto_rawDescGZIP(), []int{12}
+	return file_quicvideo_v1_control_proto_rawDescGZIP(), []int{12}
 }
 
 func (x *Publish) GetClientRef() string {
@@ -1330,7 +1330,7 @@ type PublishOK struct {
 
 func (x *PublishOK) Reset() {
 	*x = PublishOK{}
-	mi := &file_control_proto_msgTypes[13]
+	mi := &file_quicvideo_v1_control_proto_msgTypes[13]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1342,7 +1342,7 @@ func (x *PublishOK) String() string {
 func (*PublishOK) ProtoMessage() {}
 
 func (x *PublishOK) ProtoReflect() protoreflect.Message {
-	mi := &file_control_proto_msgTypes[13]
+	mi := &file_quicvideo_v1_control_proto_msgTypes[13]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1355,7 +1355,7 @@ func (x *PublishOK) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PublishOK.ProtoReflect.Descriptor instead.
 func (*PublishOK) Descriptor() ([]byte, []int) {
-	return file_control_proto_rawDescGZIP(), []int{13}
+	return file_quicvideo_v1_control_proto_rawDescGZIP(), []int{13}
 }
 
 func (x *PublishOK) GetClientRef() string {
@@ -1381,7 +1381,7 @@ type Unpublish struct {
 
 func (x *Unpublish) Reset() {
 	*x = Unpublish{}
-	mi := &file_control_proto_msgTypes[14]
+	mi := &file_quicvideo_v1_control_proto_msgTypes[14]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1393,7 +1393,7 @@ func (x *Unpublish) String() string {
 func (*Unpublish) ProtoMessage() {}
 
 func (x *Unpublish) ProtoReflect() protoreflect.Message {
-	mi := &file_control_proto_msgTypes[14]
+	mi := &file_quicvideo_v1_control_proto_msgTypes[14]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1406,7 +1406,7 @@ func (x *Unpublish) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Unpublish.ProtoReflect.Descriptor instead.
 func (*Unpublish) Descriptor() ([]byte, []int) {
-	return file_control_proto_rawDescGZIP(), []int{14}
+	return file_quicvideo_v1_control_proto_rawDescGZIP(), []int{14}
 }
 
 func (x *Unpublish) GetTrackId() uint32 {
@@ -1425,7 +1425,7 @@ type TrackAdded struct {
 
 func (x *TrackAdded) Reset() {
 	*x = TrackAdded{}
-	mi := &file_control_proto_msgTypes[15]
+	mi := &file_quicvideo_v1_control_proto_msgTypes[15]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1437,7 +1437,7 @@ func (x *TrackAdded) String() string {
 func (*TrackAdded) ProtoMessage() {}
 
 func (x *TrackAdded) ProtoReflect() protoreflect.Message {
-	mi := &file_control_proto_msgTypes[15]
+	mi := &file_quicvideo_v1_control_proto_msgTypes[15]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1450,7 +1450,7 @@ func (x *TrackAdded) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TrackAdded.ProtoReflect.Descriptor instead.
 func (*TrackAdded) Descriptor() ([]byte, []int) {
-	return file_control_proto_rawDescGZIP(), []int{15}
+	return file_quicvideo_v1_control_proto_rawDescGZIP(), []int{15}
 }
 
 func (x *TrackAdded) GetTrack() *Track {
@@ -1469,7 +1469,7 @@ type TrackRemoved struct {
 
 func (x *TrackRemoved) Reset() {
 	*x = TrackRemoved{}
-	mi := &file_control_proto_msgTypes[16]
+	mi := &file_quicvideo_v1_control_proto_msgTypes[16]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1481,7 +1481,7 @@ func (x *TrackRemoved) String() string {
 func (*TrackRemoved) ProtoMessage() {}
 
 func (x *TrackRemoved) ProtoReflect() protoreflect.Message {
-	mi := &file_control_proto_msgTypes[16]
+	mi := &file_quicvideo_v1_control_proto_msgTypes[16]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1494,7 +1494,7 @@ func (x *TrackRemoved) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TrackRemoved.ProtoReflect.Descriptor instead.
 func (*TrackRemoved) Descriptor() ([]byte, []int) {
-	return file_control_proto_rawDescGZIP(), []int{16}
+	return file_quicvideo_v1_control_proto_rawDescGZIP(), []int{16}
 }
 
 func (x *TrackRemoved) GetTrackId() uint32 {
@@ -1515,7 +1515,7 @@ type KeyframeRequest struct {
 
 func (x *KeyframeRequest) Reset() {
 	*x = KeyframeRequest{}
-	mi := &file_control_proto_msgTypes[17]
+	mi := &file_quicvideo_v1_control_proto_msgTypes[17]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1527,7 +1527,7 @@ func (x *KeyframeRequest) String() string {
 func (*KeyframeRequest) ProtoMessage() {}
 
 func (x *KeyframeRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_control_proto_msgTypes[17]
+	mi := &file_quicvideo_v1_control_proto_msgTypes[17]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1540,7 +1540,7 @@ func (x *KeyframeRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use KeyframeRequest.ProtoReflect.Descriptor instead.
 func (*KeyframeRequest) Descriptor() ([]byte, []int) {
-	return file_control_proto_rawDescGZIP(), []int{17}
+	return file_quicvideo_v1_control_proto_rawDescGZIP(), []int{17}
 }
 
 func (x *KeyframeRequest) GetTrackId() uint32 {
@@ -1575,7 +1575,7 @@ type Subscribe struct {
 
 func (x *Subscribe) Reset() {
 	*x = Subscribe{}
-	mi := &file_control_proto_msgTypes[18]
+	mi := &file_quicvideo_v1_control_proto_msgTypes[18]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1587,7 +1587,7 @@ func (x *Subscribe) String() string {
 func (*Subscribe) ProtoMessage() {}
 
 func (x *Subscribe) ProtoReflect() protoreflect.Message {
-	mi := &file_control_proto_msgTypes[18]
+	mi := &file_quicvideo_v1_control_proto_msgTypes[18]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1600,7 +1600,7 @@ func (x *Subscribe) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Subscribe.ProtoReflect.Descriptor instead.
 func (*Subscribe) Descriptor() ([]byte, []int) {
-	return file_control_proto_rawDescGZIP(), []int{18}
+	return file_quicvideo_v1_control_proto_rawDescGZIP(), []int{18}
 }
 
 func (x *Subscribe) GetTrackId() uint32 {
@@ -1633,7 +1633,7 @@ type Unsubscribe struct {
 
 func (x *Unsubscribe) Reset() {
 	*x = Unsubscribe{}
-	mi := &file_control_proto_msgTypes[19]
+	mi := &file_quicvideo_v1_control_proto_msgTypes[19]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1645,7 +1645,7 @@ func (x *Unsubscribe) String() string {
 func (*Unsubscribe) ProtoMessage() {}
 
 func (x *Unsubscribe) ProtoReflect() protoreflect.Message {
-	mi := &file_control_proto_msgTypes[19]
+	mi := &file_quicvideo_v1_control_proto_msgTypes[19]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1658,7 +1658,7 @@ func (x *Unsubscribe) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Unsubscribe.ProtoReflect.Descriptor instead.
 func (*Unsubscribe) Descriptor() ([]byte, []int) {
-	return file_control_proto_rawDescGZIP(), []int{19}
+	return file_quicvideo_v1_control_proto_rawDescGZIP(), []int{19}
 }
 
 func (x *Unsubscribe) GetTrackId() uint32 {
@@ -1689,7 +1689,7 @@ type ReceiverReport struct {
 
 func (x *ReceiverReport) Reset() {
 	*x = ReceiverReport{}
-	mi := &file_control_proto_msgTypes[20]
+	mi := &file_quicvideo_v1_control_proto_msgTypes[20]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1701,7 +1701,7 @@ func (x *ReceiverReport) String() string {
 func (*ReceiverReport) ProtoMessage() {}
 
 func (x *ReceiverReport) ProtoReflect() protoreflect.Message {
-	mi := &file_control_proto_msgTypes[20]
+	mi := &file_quicvideo_v1_control_proto_msgTypes[20]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1714,7 +1714,7 @@ func (x *ReceiverReport) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ReceiverReport.ProtoReflect.Descriptor instead.
 func (*ReceiverReport) Descriptor() ([]byte, []int) {
-	return file_control_proto_rawDescGZIP(), []int{20}
+	return file_quicvideo_v1_control_proto_rawDescGZIP(), []int{20}
 }
 
 func (x *ReceiverReport) GetTrackId() uint32 {
@@ -1797,7 +1797,7 @@ type SubscriptionState struct {
 
 func (x *SubscriptionState) Reset() {
 	*x = SubscriptionState{}
-	mi := &file_control_proto_msgTypes[21]
+	mi := &file_quicvideo_v1_control_proto_msgTypes[21]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1809,7 +1809,7 @@ func (x *SubscriptionState) String() string {
 func (*SubscriptionState) ProtoMessage() {}
 
 func (x *SubscriptionState) ProtoReflect() protoreflect.Message {
-	mi := &file_control_proto_msgTypes[21]
+	mi := &file_quicvideo_v1_control_proto_msgTypes[21]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1822,7 +1822,7 @@ func (x *SubscriptionState) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SubscriptionState.ProtoReflect.Descriptor instead.
 func (*SubscriptionState) Descriptor() ([]byte, []int) {
-	return file_control_proto_rawDescGZIP(), []int{21}
+	return file_quicvideo_v1_control_proto_rawDescGZIP(), []int{21}
 }
 
 func (x *SubscriptionState) GetTrackId() uint32 {
@@ -1888,7 +1888,7 @@ type LayerActive struct {
 
 func (x *LayerActive) Reset() {
 	*x = LayerActive{}
-	mi := &file_control_proto_msgTypes[22]
+	mi := &file_quicvideo_v1_control_proto_msgTypes[22]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1900,7 +1900,7 @@ func (x *LayerActive) String() string {
 func (*LayerActive) ProtoMessage() {}
 
 func (x *LayerActive) ProtoReflect() protoreflect.Message {
-	mi := &file_control_proto_msgTypes[22]
+	mi := &file_quicvideo_v1_control_proto_msgTypes[22]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1913,7 +1913,7 @@ func (x *LayerActive) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use LayerActive.ProtoReflect.Descriptor instead.
 func (*LayerActive) Descriptor() ([]byte, []int) {
-	return file_control_proto_rawDescGZIP(), []int{22}
+	return file_quicvideo_v1_control_proto_rawDescGZIP(), []int{22}
 }
 
 func (x *LayerActive) GetTrackId() uint32 {
@@ -1948,7 +1948,7 @@ type Refresh struct {
 
 func (x *Refresh) Reset() {
 	*x = Refresh{}
-	mi := &file_control_proto_msgTypes[23]
+	mi := &file_quicvideo_v1_control_proto_msgTypes[23]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1960,7 +1960,7 @@ func (x *Refresh) String() string {
 func (*Refresh) ProtoMessage() {}
 
 func (x *Refresh) ProtoReflect() protoreflect.Message {
-	mi := &file_control_proto_msgTypes[23]
+	mi := &file_quicvideo_v1_control_proto_msgTypes[23]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1973,7 +1973,7 @@ func (x *Refresh) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Refresh.ProtoReflect.Descriptor instead.
 func (*Refresh) Descriptor() ([]byte, []int) {
-	return file_control_proto_rawDescGZIP(), []int{23}
+	return file_quicvideo_v1_control_proto_rawDescGZIP(), []int{23}
 }
 
 func (x *Refresh) GetToken() string {
@@ -1992,7 +1992,7 @@ type RefreshOK struct {
 
 func (x *RefreshOK) Reset() {
 	*x = RefreshOK{}
-	mi := &file_control_proto_msgTypes[24]
+	mi := &file_quicvideo_v1_control_proto_msgTypes[24]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2004,7 +2004,7 @@ func (x *RefreshOK) String() string {
 func (*RefreshOK) ProtoMessage() {}
 
 func (x *RefreshOK) ProtoReflect() protoreflect.Message {
-	mi := &file_control_proto_msgTypes[24]
+	mi := &file_quicvideo_v1_control_proto_msgTypes[24]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2017,7 +2017,7 @@ func (x *RefreshOK) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RefreshOK.ProtoReflect.Descriptor instead.
 func (*RefreshOK) Descriptor() ([]byte, []int) {
-	return file_control_proto_rawDescGZIP(), []int{24}
+	return file_quicvideo_v1_control_proto_rawDescGZIP(), []int{24}
 }
 
 func (x *RefreshOK) GetTokenExpiresAt() int64 {
@@ -2036,7 +2036,7 @@ type Ping struct {
 
 func (x *Ping) Reset() {
 	*x = Ping{}
-	mi := &file_control_proto_msgTypes[25]
+	mi := &file_quicvideo_v1_control_proto_msgTypes[25]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2048,7 +2048,7 @@ func (x *Ping) String() string {
 func (*Ping) ProtoMessage() {}
 
 func (x *Ping) ProtoReflect() protoreflect.Message {
-	mi := &file_control_proto_msgTypes[25]
+	mi := &file_quicvideo_v1_control_proto_msgTypes[25]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2061,7 +2061,7 @@ func (x *Ping) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Ping.ProtoReflect.Descriptor instead.
 func (*Ping) Descriptor() ([]byte, []int) {
-	return file_control_proto_rawDescGZIP(), []int{25}
+	return file_quicvideo_v1_control_proto_rawDescGZIP(), []int{25}
 }
 
 func (x *Ping) GetId() uint64 {
@@ -2080,7 +2080,7 @@ type Pong struct {
 
 func (x *Pong) Reset() {
 	*x = Pong{}
-	mi := &file_control_proto_msgTypes[26]
+	mi := &file_quicvideo_v1_control_proto_msgTypes[26]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2092,7 +2092,7 @@ func (x *Pong) String() string {
 func (*Pong) ProtoMessage() {}
 
 func (x *Pong) ProtoReflect() protoreflect.Message {
-	mi := &file_control_proto_msgTypes[26]
+	mi := &file_quicvideo_v1_control_proto_msgTypes[26]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2105,7 +2105,7 @@ func (x *Pong) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Pong.ProtoReflect.Descriptor instead.
 func (*Pong) Descriptor() ([]byte, []int) {
-	return file_control_proto_rawDescGZIP(), []int{26}
+	return file_quicvideo_v1_control_proto_rawDescGZIP(), []int{26}
 }
 
 func (x *Pong) GetId() uint64 {
@@ -2115,11 +2115,11 @@ func (x *Pong) GetId() uint64 {
 	return 0
 }
 
-var File_control_proto protoreflect.FileDescriptor
+var File_quicvideo_v1_control_proto protoreflect.FileDescriptor
 
-const file_control_proto_rawDesc = "" +
+const file_quicvideo_v1_control_proto_rawDesc = "" +
 	"\n" +
-	"\rcontrol.proto\x12\fquicvideo.v1\"\xd9\n" +
+	"\x1aquicvideo/v1/control.proto\x12\fquicvideo.v1\"\xd9\n" +
 	"\n" +
 	"\x0eControlMessage\x12+\n" +
 	"\x05hello\x18\x01 \x01(\v2\x13.quicvideo.v1.HelloH\x00R\x05hello\x121\n" +
@@ -2287,20 +2287,20 @@ const file_control_proto_rawDesc = "" +
 	"\x06SCREEN\x10\x02B/Z-github.com/boson-chat/quicvideo/gen/controlpbb\x06proto3"
 
 var (
-	file_control_proto_rawDescOnce sync.Once
-	file_control_proto_rawDescData []byte
+	file_quicvideo_v1_control_proto_rawDescOnce sync.Once
+	file_quicvideo_v1_control_proto_rawDescData []byte
 )
 
-func file_control_proto_rawDescGZIP() []byte {
-	file_control_proto_rawDescOnce.Do(func() {
-		file_control_proto_rawDescData = protoimpl.X.CompressGZIP(unsafe.Slice(unsafe.StringData(file_control_proto_rawDesc), len(file_control_proto_rawDesc)))
+func file_quicvideo_v1_control_proto_rawDescGZIP() []byte {
+	file_quicvideo_v1_control_proto_rawDescOnce.Do(func() {
+		file_quicvideo_v1_control_proto_rawDescData = protoimpl.X.CompressGZIP(unsafe.Slice(unsafe.StringData(file_quicvideo_v1_control_proto_rawDesc), len(file_quicvideo_v1_control_proto_rawDesc)))
 	})
-	return file_control_proto_rawDescData
+	return file_quicvideo_v1_control_proto_rawDescData
 }
 
-var file_control_proto_enumTypes = make([]protoimpl.EnumInfo, 2)
-var file_control_proto_msgTypes = make([]protoimpl.MessageInfo, 27)
-var file_control_proto_goTypes = []any{
+var file_quicvideo_v1_control_proto_enumTypes = make([]protoimpl.EnumInfo, 2)
+var file_quicvideo_v1_control_proto_msgTypes = make([]protoimpl.MessageInfo, 27)
+var file_quicvideo_v1_control_proto_goTypes = []any{
 	(TrackKind)(0),            // 0: quicvideo.v1.TrackKind
 	(Error_Code)(0),           // 1: quicvideo.v1.Error.Code
 	(*ControlMessage)(nil),    // 2: quicvideo.v1.ControlMessage
@@ -2331,7 +2331,7 @@ var file_control_proto_goTypes = []any{
 	(*Ping)(nil),              // 27: quicvideo.v1.Ping
 	(*Pong)(nil),              // 28: quicvideo.v1.Pong
 }
-var file_control_proto_depIdxs = []int32{
+var file_quicvideo_v1_control_proto_depIdxs = []int32{
 	3,  // 0: quicvideo.v1.ControlMessage.hello:type_name -> quicvideo.v1.Hello
 	4,  // 1: quicvideo.v1.ControlMessage.welcome:type_name -> quicvideo.v1.Welcome
 	5,  // 2: quicvideo.v1.ControlMessage.error:type_name -> quicvideo.v1.Error
@@ -2371,12 +2371,12 @@ var file_control_proto_depIdxs = []int32{
 	0,  // [0:32] is the sub-list for field type_name
 }
 
-func init() { file_control_proto_init() }
-func file_control_proto_init() {
-	if File_control_proto != nil {
+func init() { file_quicvideo_v1_control_proto_init() }
+func file_quicvideo_v1_control_proto_init() {
+	if File_quicvideo_v1_control_proto != nil {
 		return
 	}
-	file_control_proto_msgTypes[0].OneofWrappers = []any{
+	file_quicvideo_v1_control_proto_msgTypes[0].OneofWrappers = []any{
 		(*ControlMessage_Hello)(nil),
 		(*ControlMessage_Welcome)(nil),
 		(*ControlMessage_Error)(nil),
@@ -2405,18 +2405,18 @@ func file_control_proto_init() {
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
-			RawDescriptor: unsafe.Slice(unsafe.StringData(file_control_proto_rawDesc), len(file_control_proto_rawDesc)),
+			RawDescriptor: unsafe.Slice(unsafe.StringData(file_quicvideo_v1_control_proto_rawDesc), len(file_quicvideo_v1_control_proto_rawDesc)),
 			NumEnums:      2,
 			NumMessages:   27,
 			NumExtensions: 0,
 			NumServices:   0,
 		},
-		GoTypes:           file_control_proto_goTypes,
-		DependencyIndexes: file_control_proto_depIdxs,
-		EnumInfos:         file_control_proto_enumTypes,
-		MessageInfos:      file_control_proto_msgTypes,
+		GoTypes:           file_quicvideo_v1_control_proto_goTypes,
+		DependencyIndexes: file_quicvideo_v1_control_proto_depIdxs,
+		EnumInfos:         file_quicvideo_v1_control_proto_enumTypes,
+		MessageInfos:      file_quicvideo_v1_control_proto_msgTypes,
 	}.Build()
-	File_control_proto = out.File
-	file_control_proto_goTypes = nil
-	file_control_proto_depIdxs = nil
+	File_quicvideo_v1_control_proto = out.File
+	file_quicvideo_v1_control_proto_goTypes = nil
+	file_quicvideo_v1_control_proto_depIdxs = nil
 }
