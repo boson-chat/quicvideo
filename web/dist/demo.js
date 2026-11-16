@@ -3421,11 +3421,12 @@ function cameraLayers(w, h, fps) {
     25e5
   );
 }
+var SCREEN_FPS = 30;
 function screenLayers(w, h) {
   const [lw, lh] = fit(w, h, 1280, 1280);
   const [hw, hh] = fit(w, h, 1920, 1920);
-  if (lw === hw) return ladder([[lw, lh, 15]], 0.07, 3e5, 3e6);
-  return ladder([[lw, lh, 5], [hw, hh, 15]], 0.07, 3e5, 3e6);
+  if (lw === hw) return ladder([[lw, lh, SCREEN_FPS]], 0.05, 4e5, 4e6);
+  return ladder([[lw, lh, 15], [hw, hh, SCREEN_FPS]], 0.05, 4e5, 4e6);
 }
 function layerForTile(layers, w, h, visible) {
   if (!visible || w <= 0 || h <= 0 || layers.length === 0) return null;
@@ -4170,7 +4171,7 @@ async function toggleScreen() {
     $("screen").textContent = "Share screen";
     return;
   }
-  const media = await navigator.mediaDevices.getDisplayMedia({ video: { frameRate: 15 }, preferCurrentTab: params.has("screen") });
+  const media = await navigator.mediaDevices.getDisplayMedia({ video: { frameRate: SCREEN_FPS }, preferCurrentTab: params.has("screen") });
   const track = media.getVideoTracks()[0];
   const s = track.getSettings();
   screen = await client.publish(2 /* SCREEN */, track, screenLayers(s.width ?? 1920, s.height ?? 1080));
