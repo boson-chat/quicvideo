@@ -31,9 +31,13 @@ const (
 
 // Camera is a video capture device.
 type Camera struct {
-	ID      string // stable unique id
-	Name    string
-	Kind    CameraKind
+	ID   string // stable unique id
+	Name string
+	Kind CameraKind
+	// Facing: "front" (the user's side: a phone's selfie camera), "back",
+	// or "" (a webcam, external, unknown). Apps mirror their own preview of
+	// a front camera only; what's sent is never mirrored.
+	Facing  string
 	Formats []CameraFormat
 	// Unavailable says why the camera can't deliver pictures right now
 	// ("" = it can): e.g. a MacBook's built-in camera with the lid closed,

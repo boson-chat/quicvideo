@@ -430,3 +430,6 @@ func bgra2nv12roundtrip(src []byte, sw, sh, dw, dh int) []byte {
 		C.int(dw), C.int(dh), (*C.uint8_t)(unsafe.Pointer(&out[0])), C.int(dw*4))
 	return out
 }
+
+// SetDeviceOrientation is for Android; here the OS (or nothing) rotates frames.
+func SetDeviceOrientation(int) {}

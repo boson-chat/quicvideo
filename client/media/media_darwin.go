@@ -7,6 +7,7 @@ package media
 #cgo darwin,!ios CFLAGS: -mmacosx-version-min=12.0
 #cgo LDFLAGS: -framework Foundation -framework CoreMedia -framework CoreVideo -framework VideoToolbox -framework CoreGraphics -framework IOSurface -framework AVFoundation
 #cgo darwin,!ios LDFLAGS: -framework ScreenCaptureKit -framework AppKit -framework IOKit
+#cgo ios LDFLAGS: -framework UIKit
 #include <stdlib.h>
 #include "media_darwin.h"
 */
@@ -344,3 +345,6 @@ func (p *PixelBuffer) drawPattern(n int) {
 	w, h := p.Size()
 	drawPatternBGRA(pix, stride, w, h, n)
 }
+
+// SetDeviceOrientation is for Android; here the OS (or nothing) rotates frames.
+func SetDeviceOrientation(int) {}
