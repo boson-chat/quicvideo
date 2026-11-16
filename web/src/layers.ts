@@ -1,6 +1,6 @@
 // Layer ladders, tile → layer mapping and the tile layout: the same rules
 // as client/media (layers.go) and the desktop viewer (layout.go).
-import type { Layer } from "./gen/control_pb";
+import type { Layer } from "./gen/quicvideo/v1/control_pb";
 
 export interface LayerSpec {
   id: number;

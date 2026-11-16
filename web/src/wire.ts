@@ -1,7 +1,7 @@
 // quicvideo wire format (docs/protocol.md): varint-framed protobuf control
 // messages, and media streams of [track, layer, group] + frames.
 import { fromBinary, toBinary } from "@bufbuild/protobuf";
-import { type ControlMessage, ControlMessageSchema } from "./gen/control_pb";
+import { type ControlMessage, ControlMessageSchema } from "./gen/quicvideo/v1/control_pb";
 
 export const MAX_FRAME = 4 << 20;
 export const FLAG_KEYFRAME = 1;

@@ -4,7 +4,7 @@
   "license": "AGPL-3.0-only",
   "type": "module",
   "scripts": {
-    "proto": "protoc -I ../proto --plugin=protoc-gen-es=node_modules/.bin/protoc-gen-es --es_out=src/gen --es_opt=target=ts ../proto/control.proto",
+    "proto": "protoc -I ../proto --plugin=protoc-gen-es=node_modules/.bin/protoc-gen-es --es_out=src/gen --es_opt=target=ts ../proto/quicvideo/v1/control.proto",
     "build": "tsc --noEmit && esbuild src/demo.ts --bundle --format=esm --target=chrome120 --outfile=dist/demo.js && cp src/index.html dist/index.html",
     "test": "playwright test"
   },

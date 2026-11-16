@@ -285,7 +285,7 @@ The QUIC listener negotiates ALPN `boson-video/1` (native) or `h3`. HTTP/3 conne
 - **Controller:** the bandwidth controller gets no RTT/loss stats from a WebTransport session. It falls back to backlog, cuts and receiver reports.
 
 The browser client (`web/src/client.ts`):
-- **Protocol:** the same protobuf control messages (protobuf-es, generated from `proto/control.proto`) and the same media stream format.
+- **Protocol:** the same protobuf control messages (protobuf-es, generated from `proto/quicvideo/v1/control.proto`) and the same media stream format.
 - **Capture:** frames come through `MediaStreamTrackProcessor` where it exists (Chromium), else from a `<video>` drawn at the layer rate.
 - **Encode:** each active layer gets an OffscreenCanvas scaled to its size and a `VideoEncoder` (H.264 Constrained Baseline, Annex-B, `latencyMode: "realtime"`, CBR-ish bitrate, keyframes on request).
 - **Send:** each group goes on a new unidirectional stream; `sendOrder` sends lower layers first. A backed-up stream drops frames until the next keyframe.

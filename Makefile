@@ -7,7 +7,7 @@ setup:
 generate: proto
 
 proto:
-	protoc -I proto --go_out=. --go_opt=module=github.com/boson-chat/quicvideo proto/control.proto
+	protoc -I proto --go_out=. --go_opt=module=github.com/boson-chat/quicvideo proto/quicvideo/v1/control.proto
 
 test:
 	go test -race ./...

@@ -6,7 +6,7 @@ One QUIC connection per client, TLS 1.3, UDP port 7710 by default.
 
 | Stream | Opened by | Content |
 |---|---|---|
-| first bidirectional | client | control messages (protobuf, `proto/control.proto`), each framed as `varint length` + `ControlMessage`; QUIC urgency 0 |
+| first bidirectional | client | control messages (protobuf, `proto/quicvideo/v1/control.proto`), each framed as `varint length` + `ControlMessage`; QUIC urgency 0 |
 | unidirectional, client → server | publisher | one **group** of one layer of one of its tracks |
 | unidirectional, server → client | relay | one group of a track the client subscribed to |
 
