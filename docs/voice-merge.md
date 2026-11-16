@@ -112,6 +112,7 @@ So: **a Go `VideoService` next to `VoiceService`** owns the quicvideo connection
    - **Errors:** surface them like voice does (`VoiceState`-style state plus an `onState` event).
 3. **Frame transport to the webview.** A loopback WebSocket bound to 127.0.0.1 on a random port, with a per-launch secret in the URL that is handed to the UI through the bridge.
    - Binary messages carry `[track id, flags, capture µs, AU]`, plus "keyframe needed" from the UI back to Go (decoder reset, see `ReportDecodeStall`).
+   - **Send AVC, not Annex B.** Each keyframe goes with an `avcC` description built from its SPS/PPS, and access units are 4-byte length-prefixed (`client/media` has the conversion). WebKitGTK's `VideoDecoder` fails on Annex B without a description (see below). Chromium/WebView2 and WebKit/WKWebView accept AVC too, so one format serves every platform.
    - Wails events carry JSON; base64 at roughly 10 Mbps across eight tiles is wasteful.
    - Streaming through the asset server's custom scheme isn't reliably incremental on WKWebView.
 4. **UI.**
@@ -145,7 +146,27 @@ So: **a Go `VideoService` next to `VoiceService`** owns the quicvideo connection
 
 ### Open questions
 
-- **WebCodecs in WebKitGTK 6.0:** not verified; it isn't installed on the CachyOS test box. Without it, Linux needs Go-side decode (`client/media`'s libavcodec decoder) and a raw-frame path (WebGL texture uploads from the WebSocket) as a fallback. Check before step 2.
+- **WebCodecs in WebKitGTK 6.0: works, in AVC form (checked 2026-11-16).** Test setup:
+  - MacBook test box: CachyOS, WebKitGTK 2.54.2, GStreamer 1.28.8 with gst-libav, openh264 and va, Intel Iris Plus;
+  - a real `WebKit.WebView` driven from Python GObject, loading a page from `http://127.0.0.1` (a secure context);
+  - a 640×360 x264 constrained-baseline clip, 60 frames, one slice per frame.
+
+  | | Result |
+  |---|---|
+  | `VideoDecoder` / `VideoEncoder` / `WebTransport` | present / present / **absent** |
+  | `isConfigSupported` `avc1.42e01e`, `42e01f`, `640028` | all `true` |
+  | Annex B, no `description` (what the spec allows) | **fails**: `EncodingError: Decode error` on every chunk. WebKitGTK hands GStreamer `stream-format=avc` caps with no `codec_data`, which `h264parse` refuses |
+  | `avcC` description + length-prefixed AUs | **60/60 frames**, NV12 640×360, about 33 ms in total |
+  | `drawImage(VideoFrame)` on a 2D canvas | works (the colour test pattern reads back) |
+
+  So boson's Linux webview can decode as planned, provided Go sends AVC (step 3). WebTransport is missing, so a pure-webview client isn't possible on Linux: the plan's native connection is needed anyway.
+
+  **Fallback** if a WebKitGTK build lacks WebCodecs or H.264 (older distros, a GStreamer without an H.264 decoder):
+  - feature-detect in the UI (`VideoDecoder.isConfigSupported` with the `avcC` description);
+  - if it fails, ask Go to decode instead, using `client/media`'s libavcodec decoder (`NewVideoDecoder`);
+  - Go scales to the tile size it already knows from `tiles()`, and sends I420 frames over the same WebSocket;
+  - the page uploads the three planes as WebGL textures and converts YUV to RGB in a shader;
+  - at tile sizes that's about 1.5 bytes per pixel per frame, e.g. 640×360 at 30 fps is about 10 MB/s per tile. That's acceptable on loopback for the 2–8-person calls this targets, and bandwidth control already lowers layers for small tiles.
 - **macOS versions:** boson's minimum is macOS 12.0 (`LSMinimumSystemVersion`, `-mmacosx-version-min=12.0`).
   - ScreenCaptureKit needs 12.3, and `SCContentSharingPicker` needs 14.
   - WKWebView's `VideoDecoder` needs WebKit 16.4 (Safari 16.4, which also shipped for Monterey).
