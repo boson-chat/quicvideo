@@ -57,6 +57,9 @@ func screenPermissionError() error {
 
 // ListScreens lists displays and normal on-screen windows.
 func ListScreens() ([]Display, []Window, error) {
+	if C.qv_screen_supported() == 0 {
+		return nil, nil, ErrScreenUnsupported
+	}
 	if ScreenPermission() != PermissionGranted {
 		return nil, nil, screenPermissionError()
 	}
@@ -130,6 +133,9 @@ func (s *nativeSource) frame(pb unsafe.Pointer, us int64) {
 // StartScreen captures a display or window (ScreenCaptureKit). Frames only
 // arrive when something on screen changed.
 func StartScreen(o ScreenOptions, push func(CapturedFrame)) (Source, error) {
+	if C.qv_screen_supported() == 0 {
+		return nil, ErrScreenUnsupported
+	}
 	if ScreenPermission() != PermissionGranted {
 		RequestScreenPermission()
 		return nil, screenPermissionError()

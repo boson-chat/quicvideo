@@ -60,6 +60,14 @@ int qv_camera_request(int timeout_ms) {
 
 // ---------------------------------------------------------------- screen
 
+// ScreenCaptureKit is weak-linked (macOS 12.3+): apps built for an older
+// minimum still launch there, without screen sharing.
+int qv_screen_supported(void) {
+    if (@available(macOS 12.3, *)) return 1;
+    return 0;
+}
+
+static SCShareableContent *shareableContent(NSError **outErr) API_AVAILABLE(macos(12.3));
 static SCShareableContent *shareableContent(NSError **outErr) {
     __block SCShareableContent *content = nil;
     __block NSError *error = nil;
@@ -86,7 +94,7 @@ static void displayPixels(CGDirectDisplayID d, int *w, int *h) {
     CGDisplayModeRelease(mode);
 }
 
-char *qv_screen_list(char **err) {
+static char *screenList(char **err) API_AVAILABLE(macos(12.3)) {
     NSError *e = nil;
     SCShareableContent *c = shareableContent(&e);
     if (c == nil) {
@@ -113,6 +121,13 @@ char *qv_screen_list(char **err) {
     return jsonString(@{@"displays" : displays, @"windows" : windows});
 }
 
+char *qv_screen_list(char **err) {
+    if (@available(macOS 12.3, *)) return screenList(err);
+    *err = strdup("screen sharing needs macOS 12.3 or later");
+    return NULL;
+}
+
+API_AVAILABLE(macos(12.3))
 @interface QVScreenOutput : NSObject <SCStreamOutput, SCStreamDelegate>
 @property(atomic) uintptr_t handle;
 @end
@@ -142,8 +157,8 @@ struct qv_screen {
     void *queue;  // its sample handler queue (retained)
 };
 
-qv_screen *qv_screen_start(uint32_t display_id, uint32_t window_id, int width, int height, int fps, int show_cursor,
-                           uintptr_t handle, char **err) {
+static qv_screen *screenStart(uint32_t display_id, uint32_t window_id, int width, int height, int fps, int show_cursor,
+                           uintptr_t handle, char **err) API_AVAILABLE(macos(12.3)) {
     NSError *e = nil;
     SCShareableContent *c = shareableContent(&e);
     if (c == nil) {
@@ -213,7 +228,14 @@ qv_screen *qv_screen_start(uint32_t display_id, uint32_t window_id, int width, i
     return s;
 }
 
-void qv_screen_stop(qv_screen *s) {
+qv_screen *qv_screen_start(uint32_t display_id, uint32_t window_id, int width, int height, int fps, int show_cursor,
+                           uintptr_t handle, char **err) {
+    if (@available(macOS 12.3, *)) return screenStart(display_id, window_id, width, height, fps, show_cursor, handle, err);
+    *err = strdup("screen sharing needs macOS 12.3 or later");
+    return NULL;
+}
+
+static void screenStop(qv_screen *s) API_AVAILABLE(macos(12.3)) {
     if (s == NULL) return;
     SCStream *stream = (__bridge_transfer SCStream *)s->stream;
     QVScreenOutput *out = (__bridge_transfer QVScreenOutput *)s->output;
@@ -230,6 +252,10 @@ void qv_screen_stop(qv_screen *s) {
     dispatch_sync(q, ^{});
     out.handle = 0;
     free(s);
+}
+
+void qv_screen_stop(qv_screen *s) {
+    if (@available(macOS 12.3, *)) screenStop(s); // only ever started on 12.3+
 }
 
 // ---------------------------------------------------------------- camera

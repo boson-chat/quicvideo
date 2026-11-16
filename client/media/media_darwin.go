@@ -3,7 +3,7 @@
 package media
 
 /*
-#cgo CFLAGS: -Wno-unused-command-line-argument -mmacosx-version-min=13.0
+#cgo CFLAGS: -Wno-unused-command-line-argument -mmacosx-version-min=12.0 -Werror=unguarded-availability-new
 #cgo LDFLAGS: -framework Foundation -framework CoreMedia -framework CoreVideo -framework VideoToolbox -framework CoreGraphics -framework IOSurface -framework ScreenCaptureKit -framework AVFoundation -framework AppKit -framework IOKit
 #include <stdlib.h>
 #include "media_darwin.h"

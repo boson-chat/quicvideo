@@ -12,6 +12,10 @@ import "errors"
 // ErrUnsupported: no capture/codec implementation on this platform yet.
 var ErrUnsupported = errors.New("media: not supported on this platform yet")
 
+// ErrScreenUnsupported: this OS version can't share the screen (macOS
+// before 12.3, which has no ScreenCaptureKit). Cameras still work.
+var ErrScreenUnsupported = errors.New("media: screen sharing needs macOS 12.3 or later")
+
 // Picture is a captured or decoded image (on macOS a CVPixelBuffer).
 // Retain/Release are reference counts: a Picture handed to a callback is
 // only valid during the call unless retained.

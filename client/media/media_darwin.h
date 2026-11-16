@@ -51,6 +51,8 @@ typedef struct qv_screen qv_screen;
 qv_screen *qv_screen_start(uint32_t display_id, uint32_t window_id, int width, int height, int fps,
                            int show_cursor, uintptr_t handle, char **err);
 void qv_screen_stop(qv_screen *s);
+// 1 if ScreenCaptureKit is there (macOS 12.3+; it's weak-linked).
+int qv_screen_supported(void);
 
 // ---- AVFoundation camera ----
 char *qv_camera_list(char **err);
