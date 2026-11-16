@@ -366,18 +366,54 @@ class LayerEncoder {
   constructor(private c: QuicVideoClient, private trackId: number, private spec: LayerSpec, screen: boolean) {
     this.canvas = new OffscreenCanvas(spec.width, spec.height);
     this.ctx = this.canvas.getContext("2d")!;
-    this.enc = new VideoEncoder({ output: (chunk) => void this.output(chunk), error: () => (this.force = true) });
-    this.enc.configure({
+    const base = {
       codec: avcCodec(spec.width, spec.height, spec.fps),
       width: spec.width,
       height: spec.height,
       bitrate: spec.bitrate,
       framerate: spec.fps,
-      latencyMode: "realtime",
       avc: { format: "annexb" },
-      contentHint: screen ? "text" : "motion",
-    } as VideoEncoderConfig);
+    };
+    const hint = { contentHint: screen ? "text" : "motion" };
+    // Fallbacks: Firefox (macOS) reports latencyMode "realtime" as supported
+    // in isConfigSupported, then fails configure() with EncodingError and
+    // closes the encoder.
+    this.configs = [
+      { ...base, ...hint, latencyMode: "realtime" },
+      { ...base, ...hint },
+      { ...base },
+    ] as VideoEncoderConfig[];
+    this.enc = this.newEncoder();
   }
+
+  private configs: VideoEncoderConfig[];
+  private configIdx = 0;
+
+  /** An encoder on the current config; an error moves to the next config
+   * (or, once a config worked, retries it: e.g. a GPU reset). */
+  private newEncoder(): VideoEncoder {
+    const enc = new VideoEncoder({
+      output: (chunk) => {
+        this.produced = true;
+        void this.output(chunk);
+      },
+      error: () => {
+        if (enc !== this.enc || this.closed) return;
+        if (!this.produced) {
+          // This config never worked: try the next, or give up (no encoder).
+          if (this.configIdx === this.configs.length - 1) return;
+          this.configIdx++;
+        }
+        this.force = true;
+        this.enc = this.newEncoder();
+      },
+    });
+    enc.configure(this.configs[this.configIdx]);
+    return enc;
+  }
+
+  private produced = false;
+  private closed = false;
 
   forceKey(): void {
     this.force = true;
@@ -386,6 +422,7 @@ class LayerEncoder {
   encode(f: VideoFrame, us: bigint): void {
     const interval = BigInt(Math.floor(1_000_000 / this.spec.fps));
     if (!this.force && this.lastUS && us < this.lastUS + (interval * 85n) / 100n) return; // fps cap
+    if (this.enc.state !== "configured") return; // being replaced after an error
     if (this.enc.encodeQueueSize > 2) return; // encoder behind: skip
     this.lastUS = us;
     // Scale to the layer (letterboxed onto the layer's canvas).
@@ -441,8 +478,43 @@ class LayerEncoder {
 
   close(): void {
     void this.stream?.close().catch(() => {});
+    this.closed = true;
     if (this.enc.state !== "closed") this.enc.close();
   }
+}
+
+/** What this browser can do with quicvideo. */
+export interface VideoSupport {
+  /** Can join and watch (WebTransport + H.264 decode). */
+  watch: boolean;
+  /** Can also send camera/screen (H.264 encode). */
+  send: boolean;
+  /** What's missing, for a message ("WebTransport", "H.264 decoding"...). */
+  missing: string[];
+}
+
+/** Checks WebTransport and WebCodecs H.264 (decode, and encode for sending). */
+export async function videoSupport(): Promise<VideoSupport> {
+  const missing: string[] = [];
+  const g = globalThis as Record<string, unknown>;
+  const wt = typeof g.WebTransport === "function";
+  if (!wt) missing.push("WebTransport");
+  let dec = false;
+  if (typeof g.VideoDecoder !== "function") missing.push("WebCodecs VideoDecoder");
+  else {
+    dec = await VideoDecoder.isConfigSupported({ codec: "avc1.42e01f" }).then((r) => !!r.supported, () => false);
+    if (!dec) missing.push("H.264 decoding");
+  }
+  let enc = false;
+  if (typeof g.VideoEncoder !== "function") missing.push("WebCodecs VideoEncoder");
+  else {
+    enc = await VideoEncoder.isConfigSupported({
+      codec: "avc1.42e01f", width: 640, height: 360, avc: { format: "annexb" },
+    } as VideoEncoderConfig).then((r) => !!r.supported, () => false);
+    if (!enc) missing.push("H.264 encoding");
+  }
+  const watch = wt && dec;
+  return { watch, send: watch && enc, missing };
 }
 
 export { TrackKind };

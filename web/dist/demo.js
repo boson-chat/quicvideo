@@ -3879,17 +3879,21 @@ var LayerEncoder = class {
     this.spec = spec;
     this.canvas = new OffscreenCanvas(spec.width, spec.height);
     this.ctx = this.canvas.getContext("2d");
-    this.enc = new VideoEncoder({ output: (chunk) => void this.output(chunk), error: () => this.force = true });
-    this.enc.configure({
+    const base = {
       codec: avcCodec(spec.width, spec.height, spec.fps),
       width: spec.width,
       height: spec.height,
       bitrate: spec.bitrate,
       framerate: spec.fps,
-      latencyMode: "realtime",
-      avc: { format: "annexb" },
-      contentHint: screen2 ? "text" : "motion"
-    });
+      avc: { format: "annexb" }
+    };
+    const hint = { contentHint: screen2 ? "text" : "motion" };
+    this.configs = [
+      { ...base, ...hint, latencyMode: "realtime" },
+      { ...base, ...hint },
+      { ...base }
+    ];
+    this.enc = this.newEncoder();
   }
   c;
   trackId;
@@ -3903,12 +3907,38 @@ var LayerEncoder = class {
   dropping = false;
   lastUS = 0n;
   captureOf = /* @__PURE__ */ new Map();
+  configs;
+  configIdx = 0;
+  /** An encoder on the current config; an error moves to the next config
+   * (or, once a config worked, retries it: e.g. a GPU reset). */
+  newEncoder() {
+    const enc = new VideoEncoder({
+      output: (chunk) => {
+        this.produced = true;
+        void this.output(chunk);
+      },
+      error: () => {
+        if (enc !== this.enc || this.closed) return;
+        if (!this.produced) {
+          if (this.configIdx === this.configs.length - 1) return;
+          this.configIdx++;
+        }
+        this.force = true;
+        this.enc = this.newEncoder();
+      }
+    });
+    enc.configure(this.configs[this.configIdx]);
+    return enc;
+  }
+  produced = false;
+  closed = false;
   forceKey() {
     this.force = true;
   }
   encode(f, us) {
     const interval = BigInt(Math.floor(1e6 / this.spec.fps));
     if (!this.force && this.lastUS && us < this.lastUS + interval * 85n / 100n) return;
+    if (this.enc.state !== "configured") return;
     if (this.enc.encodeQueueSize > 2) return;
     this.lastUS = us;
     const s = Math.min(this.spec.width / f.displayWidth, this.spec.height / f.displayHeight);
@@ -3961,9 +3991,35 @@ var LayerEncoder = class {
   close() {
     void this.stream?.close().catch(() => {
     });
+    this.closed = true;
     if (this.enc.state !== "closed") this.enc.close();
   }
 };
+async function videoSupport() {
+  const missing = [];
+  const g = globalThis;
+  const wt = typeof g.WebTransport === "function";
+  if (!wt) missing.push("WebTransport");
+  let dec = false;
+  if (typeof g.VideoDecoder !== "function") missing.push("WebCodecs VideoDecoder");
+  else {
+    dec = await VideoDecoder.isConfigSupported({ codec: "avc1.42e01f" }).then((r) => !!r.supported, () => false);
+    if (!dec) missing.push("H.264 decoding");
+  }
+  let enc = false;
+  if (typeof g.VideoEncoder !== "function") missing.push("WebCodecs VideoEncoder");
+  else {
+    enc = await VideoEncoder.isConfigSupported({
+      codec: "avc1.42e01f",
+      width: 640,
+      height: 360,
+      avc: { format: "annexb" }
+    }).then((r) => !!r.supported, () => false);
+    if (!enc) missing.push("H.264 encoding");
+  }
+  const watch = wt && dec;
+  return { watch, send: watch && enc, missing };
+}
 
 // src/demo.ts
 var $ = (id) => document.getElementById(id);
@@ -3980,7 +4036,23 @@ async function serverInfo() {
   const url = params.get("server") ?? `https://${location.hostname}:${info.quic_port || 7710}/wt`;
   return { url, certHash: info.dev_cert_hash || void 0 };
 }
+var support = null;
+async function checkSupport() {
+  support ??= await videoSupport();
+  const box = $("unsupported");
+  if (!support.watch) {
+    box.textContent = `This browser isn't supported for video (missing: ${support.missing.join(", ")}). Use a recent Chrome, Edge or Firefox, or Safari 26.4+.`;
+    box.style.display = "block";
+    $("join").disabled = true;
+    status("unsupported browser");
+  } else if (!support.send) {
+    box.textContent = `This browser can watch but not send video (missing: ${support.missing.join(", ")}).`;
+    box.style.display = "block";
+  }
+  return support;
+}
 async function join() {
+  if (!(await checkSupport()).watch) return;
   const token = params.get("token") ?? $("token").value;
   const room = params.get("room") ?? $("room").value;
   status("connecting\u2026");
@@ -4005,7 +4077,7 @@ async function join() {
   st.tracks.forEach(addTrack);
   status(`in "${room}" with ${st.participants.length} other(s)`);
   $("join").disabled = true;
-  for (const b of ["camera", "screen", "leave"]) $(b).disabled = false;
+  for (const b of support.send ? ["camera", "screen", "leave"] : ["leave"]) $(b).disabled = false;
   relayout();
 }
 function relabel(t) {
@@ -4118,11 +4190,14 @@ document.addEventListener("visibilitychange", relayout);
 globalThis.qv = {
   stats: () => client?.stats() ?? {},
   publishing: () => ({ camera: camera?.activeLayers() ?? null, screen: screen?.activeLayers() ?? null }),
-  tiles: () => [...tiles.values()].map((t) => ({ id: t.track.trackId, label: t.label.textContent }))
+  tiles: () => [...tiles.values()].map((t) => ({ id: t.track.trackId, label: t.label.textContent })),
+  support: () => checkSupport()
 };
-if (params.get("auto") === "1") {
+void checkSupport().then((s) => {
+  if (params.get("auto") !== "1" || !s.watch) return;
   join().then(async () => {
+    if (!s.send) return;
     if (params.get("camera") === "1") await toggleCamera();
     if (params.get("screen") === "1") await toggleScreen();
   }).catch((e) => status(`error: ${e.message ?? e}`));
-}
+});
