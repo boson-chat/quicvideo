@@ -86,16 +86,18 @@ With the self-signed dev certificate, the page gets the certificate's hash from 
 
 ```sh
 make run                                  # then open http://localhost:8090/web/?token=alice
-make web-test                             # Playwright: two Chromium pages + a Go bot
+make web-test                             # Playwright: Chromium, Firefox, WebKit + a Go bot
 ```
 
-Browser support (Nov 2026):
+Browser support (Nov 2026), tested with Playwright 1.65 on macOS and in CI (Linux): each browser publishes its camera and decodes the Go bot's and the other page's tracks:
 
-| | WebTransport | WebCodecs (video) | Notes |
-|---|---|---|---|
-| Chrome / Edge | 97+ | 94+ | tested (Playwright, Chromium) |
-| Firefox | 114+ | 130+ (desktop) | untested; no `MediaStreamTrackProcessor`, so capture falls back to drawing a `<video>` |
-| Safari | 26.4+ (macOS, iOS) | 16.4+ | untested; H.264 encode via VideoToolbox |
+| | WebTransport | WebCodecs (video) | Tested | Notes |
+|---|---|---|---|---|
+| Chrome / Edge | 97+ | 94+ | Chromium: camera, tab share, decode | |
+| Firefox | 114+ | 130+ (desktop) | Firefox 1572 build: camera, decode | No `MediaStreamTrackProcessor`, so capture draws a `<video>`. On macOS `latencyMode: "realtime"` is reported as supported but configure fails, so the encoder falls back to the default latency. Screen share isn't automatable, so it's untested |
+| Safari | 26.4+ (macOS, iOS) | 16.4+ | WebKit 27.2: camera, decode | Earlier Safari has no WebTransport |
+
+A browser without WebTransport or H.264 decoding gets "This browser isn't supported for video (missing: …)" and a disabled Join. Without H.264 encoding it can watch but not send. `videoSupport()` in `src/client.ts` does the check.
 
 `WEBTRANSPORT_ORIGINS` limits which page origins may open sessions (default `*`; sessions need a token either way). WebTransport sessions have no QUIC RTT/loss stats in the bandwidth controller, which then relies on send backlog, cuts and receiver reports.
 

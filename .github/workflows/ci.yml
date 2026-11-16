@@ -76,8 +76,10 @@ jobs:
       - run: go build -o viewer.exe ./examples/viewer
 
   web:
-    # Browser client: WebTransport to quicvideod, WebCodecs H.264, in real
-    # Chromium (fake camera/screen) against a Go bot publishing real H.264.
+    # Browser client: WebTransport to quicvideod, WebCodecs H.264, in
+    # Chromium, Firefox and WebKit (fake cameras; Chromium also a tab share)
+    # against a Go bot publishing real H.264. A browser build lacking a
+    # feature must show the "not supported" message instead.
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -95,11 +97,11 @@ jobs:
         working-directory: web
         run: npm run build && git diff --exit-code dist
       - working-directory: web
-        run: npx playwright install --with-deps chromium
+        run: npx playwright install --with-deps chromium firefox webkit
       - working-directory: web
         run: npx playwright test
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: webtransport-demo
-          path: web/test-results/webtransport-demo.png
+          name: browser-screenshots
+          path: web/test-results/*.png

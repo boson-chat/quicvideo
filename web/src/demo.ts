@@ -1,7 +1,7 @@
 // The quicvideo browser demo: join a room, share camera/screen, watch the
 // others. Query parameters (for tests and links): token, room, server,
 // auto=1 (join at once), camera=1, screen=1.
-import { QuicVideoClient, type Publication, TrackKind, type Track } from "./client";
+import { QuicVideoClient, type Publication, TrackKind, type Track, type VideoSupport, videoSupport } from "./client";
 import { cameraLayers, layerForTile, layout, screenLayers } from "./layers";
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
@@ -31,7 +31,28 @@ async function serverInfo(): Promise<{ url: string; certHash?: string }> {
   return { url, certHash: info.dev_cert_hash || undefined };
 }
 
+let support: VideoSupport | null = null;
+
+// Browsers without WebTransport or H.264 WebCodecs can't take part: say so
+// plainly instead of failing on join.
+async function checkSupport(): Promise<VideoSupport> {
+  support ??= await videoSupport();
+  const box = $("unsupported");
+  if (!support.watch) {
+    box.textContent = `This browser isn't supported for video (missing: ${support.missing.join(", ")}). ` +
+      "Use a recent Chrome, Edge or Firefox, or Safari 26.4+.";
+    box.style.display = "block";
+    ($("join") as HTMLButtonElement).disabled = true;
+    status("unsupported browser");
+  } else if (!support.send) {
+    box.textContent = `This browser can watch but not send video (missing: ${support.missing.join(", ")}).`;
+    box.style.display = "block";
+  }
+  return support;
+}
+
 async function join(): Promise<void> {
+  if (!(await checkSupport()).watch) return;
   const token = params.get("token") ?? ($("token") as HTMLInputElement).value;
   const room = params.get("room") ?? ($("room") as HTMLInputElement).value;
   status("connecting…");
@@ -56,7 +77,7 @@ async function join(): Promise<void> {
   st.tracks.forEach(addTrack);
   status(`in "${room}" with ${st.participants.length} other(s)`);
   ($("join") as HTMLButtonElement).disabled = true;
-  for (const b of ["camera", "screen", "leave"]) ($(b) as HTMLButtonElement).disabled = false;
+  for (const b of support!.send ? ["camera", "screen", "leave"] : ["leave"]) ($(b) as HTMLButtonElement).disabled = false;
   relayout();
 }
 
@@ -184,13 +205,16 @@ document.addEventListener("visibilitychange", relayout);
   stats: () => client?.stats() ?? {},
   publishing: () => ({ camera: camera?.activeLayers() ?? null, screen: screen?.activeLayers() ?? null }),
   tiles: () => [...tiles.values()].map((t) => ({ id: t.track.trackId, label: t.label.textContent })),
+  support: () => checkSupport(),
 };
 
-if (params.get("auto") === "1") {
+void checkSupport().then((s) => {
+  if (params.get("auto") !== "1" || !s.watch) return;
   join()
     .then(async () => {
+      if (!s.send) return;
       if (params.get("camera") === "1") await toggleCamera();
       if (params.get("screen") === "1") await toggleScreen();
     })
     .catch((e) => status(`error: ${e.message ?? e}`));
-}
+});
