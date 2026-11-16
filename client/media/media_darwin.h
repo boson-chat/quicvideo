@@ -48,7 +48,7 @@ int qv_camera_request(int timeout_ms);
 char *qv_screen_list(char **err);
 typedef struct qv_screen qv_screen;
 // display_id != 0 captures a display; else window_id. width/height 0 = native.
-qv_screen *qv_screen_start(uint32_t display_id, uint32_t window_id, int width, int height, int fps,
+qv_screen *qv_screen_start(uint32_t display_id, uint32_t window_id, int width, int height, int max_width, int fps,
                            int show_cursor, uintptr_t handle, char **err);
 void qv_screen_stop(qv_screen *s);
 // 1 if ScreenCaptureKit is there (macOS 12.3+; it's weak-linked).

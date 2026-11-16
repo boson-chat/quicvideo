@@ -34,11 +34,15 @@ export function cameraLayers(w: number, h: number, fps: number): LayerSpec[] {
     0.042, 100_000, 2_500_000);
 }
 
+/** A screen share's capture rate and top layer's fps (client/media ScreenFPS). */
+export const SCREEN_FPS = 30;
+
 export function screenLayers(w: number, h: number): LayerSpec[] {
   const [lw, lh] = fit(w, h, 1280, 1280);
   const [hw, hh] = fit(w, h, 1920, 1920);
-  if (lw === hw) return ladder([[lw, lh, 15]], 0.07, 300_000, 3_000_000);
-  return ladder([[lw, lh, 5], [hw, hh, 15]], 0.07, 300_000, 3_000_000);
+  // As client/media: 15 fps at the small layer (phones get it), 30 at the top.
+  if (lw === hw) return ladder([[lw, lh, SCREEN_FPS]], 0.05, 400_000, 4_000_000);
+  return ladder([[lw, lh, 15], [hw, hh, SCREEN_FPS]], 0.05, 400_000, 4_000_000);
 }
 
 /** The max layer for a tile of w×h device pixels (null: unsubscribe). */

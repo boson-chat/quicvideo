@@ -104,7 +104,7 @@ type ScreenOptions struct {
 	// MaxWidth caps the capture width (default 1920, the top screen layer):
 	// capturing a 3024-wide Retina panel only to scale it down wastes GPU.
 	MaxWidth int
-	FPS      int  // capture rate cap (default 15)
+	FPS      int  // capture rate cap (default ScreenFPS, the top screen layer's)
 	Cursor   bool // draw the cursor
 }
 

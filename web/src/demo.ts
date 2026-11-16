@@ -2,7 +2,7 @@
 // others. Query parameters (for tests and links): token, room, server,
 // auto=1 (join at once), camera=1, screen=1.
 import { QuicVideoClient, type Publication, TrackKind, type Track, type VideoSupport, videoSupport } from "./client";
-import { cameraLayers, layerForTile, layout, screenLayers } from "./layers";
+import { cameraLayers, layerForTile, layout, SCREEN_FPS, screenLayers } from "./layers";
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 const params = new URLSearchParams(location.search);
@@ -180,7 +180,7 @@ async function toggleScreen(): Promise<void> {
     return;
   }
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const media = await navigator.mediaDevices.getDisplayMedia({ video: { frameRate: 15 }, preferCurrentTab: params.has("screen") } as any);
+  const media = await navigator.mediaDevices.getDisplayMedia({ video: { frameRate: SCREEN_FPS }, preferCurrentTab: params.has("screen") } as any);
   const track = media.getVideoTracks()[0];
   const s = track.getSettings();
   screen = await client!.publish(TrackKind.SCREEN, track, screenLayers(s.width ?? 1920, s.height ?? 1080));

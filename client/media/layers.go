@@ -11,7 +11,9 @@ import (
 // low-latency settings: cameras need more than mostly-static screens.
 const (
 	cameraBPP = 0.042
-	screenBPP = 0.07 // per frame, but screens run at low fps
+	// Per pixel per frame. Screens move in bursts (a scroll, a video) and
+	// sit still between them, when nothing is sent at all.
+	screenBPP = 0.05
 )
 
 // CameraLayers is the simulcast ladder for a camera capturing w×h at fps:
@@ -29,6 +31,9 @@ func CameraLayers(w, h, fps int) []*controlpb.Layer {
 	}, cameraBPP, 100_000, 2_500_000)
 }
 
+// ScreenFPS is a screen share's capture rate and top layer's frame rate.
+const ScreenFPS = 30
+
 // ScreenLayers is the ladder for screen sharing w×h: a ≤1280-wide layer at
 // 5 fps for small tiles and weak links, and a ≤1920-wide layer at 15 fps.
 // Screens are mostly static text, so the bitrate is per pixel but the fps
@@ -39,10 +44,13 @@ func ScreenLayers(w, h int) []*controlpb.Layer {
 	}
 	lw, lh := fit(w, h, 1280, 1280)
 	hw, hh := fit(w, h, 1920, 1920)
+	// Both layers move smoothly: a scroll or a video at 5 fps (the old
+	// small layer, which phones get) looked like a slide show. 15 fps is
+	// the floor for motion; the top layer gets the capture's 30.
 	if lw == hw {
-		return ladder([][3]int{{lw, lh, 15}}, screenBPP, 300_000, 3_000_000)
+		return ladder([][3]int{{lw, lh, ScreenFPS}}, screenBPP, 400_000, 4_000_000)
 	}
-	return ladder([][3]int{{lw, lh, 5}, {hw, hh, 15}}, screenBPP, 300_000, 3_000_000)
+	return ladder([][3]int{{lw, lh, 15}, {hw, hh, ScreenFPS}}, screenBPP, 400_000, 4_000_000)
 }
 
 func ladder(steps [][3]int, bpp float64, floor, ceil uint64) []*controlpb.Layer {
