@@ -79,6 +79,19 @@ API_AVAILABLE(macos(12.3))
 @property(atomic) uintptr_t handle;
 @end
 
+// presentationUS is when the frame was on screen, as wall-clock µs: its
+// presentation time on the host clock (exact display refreshes, 33.3 ms
+// apart at 30 fps), not when the callback ran (which wanders by several
+// ms). Receivers pace frames by this, so even timestamps mean even motion.
+static uint64_t presentationUS(CMSampleBufferRef sb) {
+    uint64_t now = nowUS();
+    CMTime pts = CMSampleBufferGetPresentationTimeStamp(sb);
+    if (!CMTIME_IS_NUMERIC(pts)) return now;
+    double ago = CMTimeGetSeconds(CMTimeSubtract(CMClockGetTime(CMClockGetHostTimeClock()), pts));
+    if (ago < 0 || ago > 0.5) return now; // not the host clock after all
+    return now - (uint64_t)(ago * 1e6);
+}
+
 @implementation QVScreenOutput
 - (void)stream:(SCStream *)stream didOutputSampleBuffer:(CMSampleBufferRef)sb ofType:(SCStreamOutputType)type {
     if (type != SCStreamOutputTypeScreen || !CMSampleBufferIsValid(sb)) return;
@@ -91,7 +104,7 @@ API_AVAILABLE(macos(12.3))
     if (status == nil || status.integerValue != SCFrameStatusComplete) return;
     CVImageBufferRef pb = CMSampleBufferGetImageBuffer(sb);
     if (pb == NULL) return;
-    if (self.handle) qvGoScreenFrame(self.handle, (void *)pb, nowUS());
+    if (self.handle) qvGoScreenFrame(self.handle, (void *)pb, presentationUS(sb));
 }
 - (void)stream:(SCStream *)stream didStopWithError:(NSError *)error {
     if (self.handle) qvGoScreenStopped(self.handle, (int)error.code, nserr(@"screen capture stopped", error));
@@ -104,7 +117,7 @@ struct qv_screen {
     void *queue;  // its sample handler queue (retained)
 };
 
-static qv_screen *screenStart(uint32_t display_id, uint32_t window_id, int width, int height, int fps, int show_cursor,
+static qv_screen *screenStart(uint32_t display_id, uint32_t window_id, int width, int height, int max_width, int fps, int show_cursor,
                            uintptr_t handle, char **err) API_AVAILABLE(macos(12.3)) {
     NSError *e = nil;
     SCShareableContent *c = shareableContent(&e);
@@ -137,8 +150,15 @@ static qv_screen *screenStart(uint32_t display_id, uint32_t window_id, int width
         return NULL;
     }
     if (width <= 0 || height <= 0) {
+        // A window: its own pixels, but no wider than max_width (a Retina
+        // window is often 2500+ wide, scaled down to 1920 by the encoder
+        // anyway: capturing it full size costs GPU and time per frame).
         width = nw;
         height = nh;
+        if (max_width > 0 && width > max_width) {
+            height = (int)((double)height * max_width / width);
+            width = max_width;
+        }
     }
     SCStreamConfiguration *cfg = [[SCStreamConfiguration alloc] init];
     cfg.width = (size_t)(width & ~1);
@@ -175,9 +195,9 @@ static qv_screen *screenStart(uint32_t display_id, uint32_t window_id, int width
     return s;
 }
 
-qv_screen *qv_screen_start(uint32_t display_id, uint32_t window_id, int width, int height, int fps, int show_cursor,
+qv_screen *qv_screen_start(uint32_t display_id, uint32_t window_id, int width, int height, int max_width, int fps, int show_cursor,
                            uintptr_t handle, char **err) {
-    if (@available(macOS 12.3, *)) return screenStart(display_id, window_id, width, height, fps, show_cursor, handle, err);
+    if (@available(macOS 12.3, *)) return screenStart(display_id, window_id, width, height, max_width, fps, show_cursor, handle, err);
     *err = strdup("screen sharing needs macOS 12.3 or later");
     return NULL;
 }

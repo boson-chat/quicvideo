@@ -189,7 +189,7 @@ func ListScreens() ([]Display, []Window, error) {
 // restore token, so later shares don't ask again); on X11 it uses x11grab.
 func StartScreen(o ScreenOptions, push func(CapturedFrame)) (Source, error) {
 	if o.FPS <= 0 {
-		o.FPS = 15
+		o.FPS = ScreenFPS
 	}
 	if o.MaxWidth <= 0 {
 		o.MaxWidth = 1920

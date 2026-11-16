@@ -141,7 +141,7 @@ func StartScreen(o ScreenOptions, push func(CapturedFrame)) (Source, error) {
 		return nil, screenPermissionError()
 	}
 	if o.FPS <= 0 {
-		o.FPS = 15
+		o.FPS = ScreenFPS
 	}
 	if o.MaxWidth <= 0 {
 		o.MaxWidth = 1920
@@ -164,7 +164,7 @@ func StartScreen(o ScreenOptions, push func(CapturedFrame)) (Source, error) {
 	s := &nativeSource{fps: o.FPS, push: push, w: w, h: h, ended: newEnded()}
 	s.handle = cgo.NewHandle(s)
 	var errp *C.char
-	sc := C.qv_screen_start(C.uint32_t(o.DisplayID), C.uint32_t(o.WindowID), C.int(w), C.int(h), C.int(o.FPS),
+	sc := C.qv_screen_start(C.uint32_t(o.DisplayID), C.uint32_t(o.WindowID), C.int(w), C.int(h), C.int(o.MaxWidth), C.int(o.FPS),
 		cbool(o.Cursor), C.uintptr_t(s.handle), &errp)
 	if sc == nil {
 		s.handle.Delete()

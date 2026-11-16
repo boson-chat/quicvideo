@@ -38,16 +38,16 @@ func TestCameraLayers(t *testing.T) {
 
 func TestScreenLayers(t *testing.T) {
 	ls := ScreenLayers(3024, 1964) // MacBook Pro Retina
-	if len(ls) != 2 || ls[0].GetWidth() != 1280 || ls[0].GetFps() != 5 || ls[1].GetWidth() != 1920 || ls[1].GetFps() != 15 {
+	if len(ls) != 2 || ls[0].GetWidth() != 1280 || ls[0].GetFps() != 15 || ls[1].GetWidth() != 1920 || ls[1].GetFps() != ScreenFPS {
 		t.Fatalf("%v", ls)
 	}
 	if ls[1].GetHeight() != 1246 { // 1964 × 1920/3024 = 1247 → even
 		t.Errorf("aspect: %v", ls[1])
 	}
-	if ls[0].GetBitrate() < 300_000 || ls[1].GetBitrate() > 3_000_000 || ls[1].GetBitrate() <= ls[0].GetBitrate() {
+	if ls[0].GetBitrate() < 400_000 || ls[1].GetBitrate() > 4_000_000 || ls[1].GetBitrate() <= ls[0].GetBitrate() {
 		t.Errorf("bitrates %v", ls)
 	}
-	if one := ScreenLayers(1024, 768); len(one) != 1 || one[0].GetFps() != 15 {
+	if one := ScreenLayers(1024, 768); len(one) != 1 || one[0].GetFps() != ScreenFPS {
 		t.Errorf("small screen: %v", one)
 	}
 }
