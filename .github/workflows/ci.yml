@@ -61,6 +61,24 @@ jobs:
           go build -o /tmp/captest-ios ./examples/captest
           ! otool -L /tmp/captest-ios | grep -E "AppKit|ScreenCaptureKit|IOKit"
 
+  android:
+    # Android media backend (Camera2 NDK + AMediaCodec), for the boson app's
+    # camera. Built and vetted here; it runs on a device or emulator (the
+    # encoder round trip passes on the API 35 emulator: client/media's
+    # TestAEncoder via adb).
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: client/media builds for Android (API 26, arm64)
+        run: |
+          TC="$ANDROID_NDK_LATEST_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin"
+          export GOOS=android GOARCH=arm64 CGO_ENABLED=1 CC="$TC/aarch64-linux-android26-clang"
+          go vet ./client/media/
+          go test -c -o /tmp/media-android.test ./client/media/
+
   windows:
     # Windows media backend (Media Foundation, Windows.Graphics.Capture) and
     # the viewer. There's no Windows dev machine: this job is the only place
