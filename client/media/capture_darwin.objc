@@ -12,6 +12,7 @@
 extern void qvGoScreenFrame(uintptr_t handle, void *pb, int64_t us);
 extern void qvGoScreenStopped(uintptr_t handle, int code, char *msg);
 extern void qvGoCameraFrame(uintptr_t handle, void *pb, int64_t us);
+extern void qvGoCameraStopped(uintptr_t handle, char *msg);
 
 static char *nserr(NSString *prefix, NSError *err) {
     NSString *s = err ? [NSString stringWithFormat:@"%@: %@ (%@ %ld)", prefix, err.localizedDescription, err.domain,
@@ -112,7 +113,7 @@ char *qv_screen_list(char **err) {
 }
 
 @interface QVScreenOutput : NSObject <SCStreamOutput, SCStreamDelegate>
-@property(nonatomic) uintptr_t handle;
+@property(atomic) uintptr_t handle;
 @end
 
 @implementation QVScreenOutput
@@ -127,16 +128,17 @@ char *qv_screen_list(char **err) {
     if (status == nil || status.integerValue != SCFrameStatusComplete) return;
     CVImageBufferRef pb = CMSampleBufferGetImageBuffer(sb);
     if (pb == NULL) return;
-    qvGoScreenFrame(self.handle, (void *)pb, nowUS());
+    if (self.handle) qvGoScreenFrame(self.handle, (void *)pb, nowUS());
 }
 - (void)stream:(SCStream *)stream didStopWithError:(NSError *)error {
-    qvGoScreenStopped(self.handle, (int)error.code, nserr(@"screen capture stopped", error));
+    if (self.handle) qvGoScreenStopped(self.handle, (int)error.code, nserr(@"screen capture stopped", error));
 }
 @end
 
 struct qv_screen {
     void *stream; // SCStream (retained)
     void *output; // QVScreenOutput (retained)
+    void *queue;  // its sample handler queue (retained)
 };
 
 qv_screen *qv_screen_start(uint32_t display_id, uint32_t window_id, int width, int height, int fps, int show_cursor,
@@ -206,6 +208,7 @@ qv_screen *qv_screen_start(uint32_t display_id, uint32_t window_id, int width, i
     qv_screen *s = calloc(1, sizeof(*s));
     s->stream = (__bridge_retained void *)stream;
     s->output = (__bridge_retained void *)out;
+    s->queue = (__bridge_retained void *)q;
     return s;
 }
 
@@ -213,12 +216,18 @@ void qv_screen_stop(qv_screen *s) {
     if (s == NULL) return;
     SCStream *stream = (__bridge_transfer SCStream *)s->stream;
     QVScreenOutput *out = (__bridge_transfer QVScreenOutput *)s->output;
+    out.handle = 0; // our own stop isn't "the share ended"; late frames are dropped
     dispatch_semaphore_t sem = dispatch_semaphore_create(0);
     [stream stopCaptureWithCompletionHandler:^(NSError *e) {
       dispatch_semaphore_signal(sem);
     }];
     dispatch_semaphore_wait(sem, dispatch_time(DISPATCH_TIME_NOW, 5 * NSEC_PER_SEC));
     [stream removeStreamOutput:out type:SCStreamOutputTypeScreen error:nil];
+    // A frame already on the handler queue would call into Go after Stop
+    // deleted its handle: wait for the queue to drain.
+    dispatch_queue_t q = (__bridge_transfer dispatch_queue_t)s->queue;
+    dispatch_sync(q, ^{});
+    out.handle = 0;
     free(s);
 }
 
@@ -270,7 +279,7 @@ char *qv_camera_list(char **err) {
 }
 
 @interface QVCameraOutput : NSObject <AVCaptureVideoDataOutputSampleBufferDelegate>
-@property(nonatomic) uintptr_t handle;
+@property(atomic) uintptr_t handle;
 @end
 
 @implementation QVCameraOutput
@@ -278,13 +287,16 @@ char *qv_camera_list(char **err) {
     didOutputSampleBuffer:(CMSampleBufferRef)sb
            fromConnection:(AVCaptureConnection *)connection {
     CVImageBufferRef pb = CMSampleBufferGetImageBuffer(sb);
-    if (pb) qvGoCameraFrame(self.handle, (void *)pb, nowUS());
+    if (pb && self.handle) qvGoCameraFrame(self.handle, (void *)pb, nowUS());
 }
 @end
 
 struct qv_camera {
-    void *session; // AVCaptureSession (retained)
-    void *output;  // QVCameraOutput (retained)
+    void *session;   // AVCaptureSession (retained)
+    void *output;    // QVCameraOutput (retained)
+    void *video;     // AVCaptureVideoDataOutput (retained)
+    void *queue;     // its sample buffer queue (retained)
+    void *observers; // NSArray of NotificationCenter tokens (retained)
 };
 
 qv_camera *qv_camera_start(const char *unique_id, int width, int height, int fps, uintptr_t handle, char **err) {
@@ -342,7 +354,8 @@ qv_camera *qv_camera_start(const char *unique_id, int width, int height, int fps
     vo.alwaysDiscardsLateVideoFrames = YES;
     QVCameraOutput *out = [[QVCameraOutput alloc] init];
     out.handle = handle;
-    [vo setSampleBufferDelegate:out queue:dispatch_queue_create("quicvideo.camera", DISPATCH_QUEUE_SERIAL)];
+    dispatch_queue_t q = dispatch_queue_create("quicvideo.camera", DISPATCH_QUEUE_SERIAL);
+    [vo setSampleBufferDelegate:out queue:q];
     if (![session canAddOutput:vo]) {
         *err = strdup("cannot capture from this camera");
         return NULL;
@@ -354,17 +367,50 @@ qv_camera *qv_camera_start(const char *unique_id, int width, int height, int fps
         *err = strdup("the camera did not start (in use by another app, or not permitted)");
         return NULL;
     }
+    // The camera can end on its own: a runtime error, or the device going
+    // away (unplugged, Continuity iPhone out of reach). Reported once; Stop
+    // removes the observers first, so its own teardown isn't reported.
+    NSNotificationCenter *nc = [NSNotificationCenter defaultCenter];
+    __weak QVCameraOutput *wout = out; // handle is 0 once Stop began
+    id errTok = [nc addObserverForName:AVCaptureSessionRuntimeErrorNotification object:session queue:nil
+                            usingBlock:^(NSNotification *n) {
+                              uintptr_t h = wout.handle;
+                              NSError *e = n.userInfo[AVCaptureSessionErrorKey];
+                              if (h) qvGoCameraStopped(h, nserr(@"camera error", e));
+                            }];
+    id goneTok = [nc addObserverForName:AVCaptureDeviceWasDisconnectedNotification object:dev queue:nil
+                             usingBlock:^(NSNotification *n) {
+                               uintptr_t h = wout.handle;
+                               if (h) qvGoCameraStopped(h, strdup("the camera was disconnected"));
+                             }];
     qv_camera *c = calloc(1, sizeof(*c));
     c->session = (__bridge_retained void *)session;
     c->output = (__bridge_retained void *)out;
+    c->video = (__bridge_retained void *)vo;
+    c->queue = (__bridge_retained void *)q;
+    c->observers = (__bridge_retained void *)@[ errTok, goneTok ];
     return c;
 }
 
+// qv_camera_stop releases the camera: the session stops (the camera light
+// goes off), the delegate is detached and its queue drained, so no frame
+// reaches Go after this returns.
 void qv_camera_stop(qv_camera *c) {
     if (c == NULL) return;
     AVCaptureSession *session = (__bridge_transfer AVCaptureSession *)c->session;
     QVCameraOutput *out = (__bridge_transfer QVCameraOutput *)c->output;
+    AVCaptureVideoDataOutput *vo = (__bridge_transfer AVCaptureVideoDataOutput *)c->video;
+    dispatch_queue_t q = (__bridge_transfer dispatch_queue_t)c->queue;
+    NSArray *observers = (__bridge_transfer NSArray *)c->observers;
+    out.handle = 0; // late frames and notifications are dropped from here on
+    for (id tok in observers) [[NSNotificationCenter defaultCenter] removeObserver:tok];
     [session stopRunning];
-    (void)out;
+    [vo setSampleBufferDelegate:nil queue:nil];
+    dispatch_sync(q, ^{});
+    out.handle = 0;
+    [session beginConfiguration];
+    for (AVCaptureInput *in in session.inputs) [session removeInput:in];
+    for (AVCaptureOutput *o in session.outputs) [session removeOutput:o];
+    [session commitConfiguration];
     free(c);
 }

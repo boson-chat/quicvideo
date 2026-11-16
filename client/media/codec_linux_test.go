@@ -131,3 +131,20 @@ func TestPatternSourceLinux(t *testing.T) {
 		t.Fatalf("%d frames", n)
 	}
 }
+
+// An encoder opened and closed without a frame (a layer switched on and
+// straight off) must close cleanly on every backend; h264_vaapi crashed
+// flushing one that never encoded.
+func TestEncoderCloseWithoutFrames(t *testing.T) {
+	for name, b := range map[string]int{"auto": BackendAuto, "openh264": BackendOpenH264, "vaapi": BackendVAAPI, "nvenc": BackendNVENC} {
+		t.Run(name, func(t *testing.T) {
+			enc, err := NewAVEncoder(EncoderConfig{Width: 640, Height: 360, FPS: 30, Bitrate: 600_000, GOP: time.Second}, b,
+				func(EncodedFrame) {})
+			if err != nil {
+				t.Skipf("no encoder: %v", err)
+			}
+			enc.Close()
+			enc.Close() // and twice
+		})
+	}
+}

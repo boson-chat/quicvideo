@@ -83,6 +83,7 @@ type capSource struct {
 	once      sync.Once
 	mu        sync.Mutex
 	stopped   bool
+	ended
 }
 
 func (s *capSource) Size() (int, int) { s.mu.Lock(); defer s.mu.Unlock(); return s.w, s.h }
@@ -125,13 +126,13 @@ func qvGoCapStopped(handle C.uintptr_t, msg *C.char) {
 	s.mu.Lock()
 	stopping := s.stopped
 	s.mu.Unlock()
-	if !stopping { // our own Stop closes the stream too: not worth a message
-		fmt.Fprintf(os.Stderr, "media: capture stopped: %s\n", C.GoString(msg))
+	if !stopping { // our own Stop closes the stream too: not an end
+		s.end(fmt.Errorf("media: capture stopped: %s", C.GoString(msg)))
 	}
 }
 
 func startAV(format, url string, w, h, fps int, push func(CapturedFrame)) (Source, error) {
-	s := &capSource{fps: fps, push: push}
+	s := &capSource{fps: fps, push: push, ended: newEnded()}
 	s.handle = cgo.NewHandle(s)
 	cf, cu := C.CString(format), C.CString(url)
 	defer C.free(unsafe.Pointer(cf))
@@ -200,7 +201,7 @@ func StartScreen(o ScreenOptions, push func(CapturedFrame)) (Source, error) {
 	if err != nil {
 		return nil, err
 	}
-	s := &capSource{fps: o.FPS, push: push, w: sess.width, h: sess.height}
+	s := &capSource{fps: o.FPS, push: push, w: sess.width, h: sess.height, ended: newEnded()}
 	s.handle = cgo.NewHandle(s)
 	var errp *C.char
 	c := C.qv_pwcap_start(C.int(sess.fd), C.uint32_t(sess.node), C.int(o.MaxWidth), C.int(o.FPS), C.uintptr_t(s.handle), &errp)

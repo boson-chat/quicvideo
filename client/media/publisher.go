@@ -260,11 +260,17 @@ func (p *Publisher) encode(le *layerEnc, pic Picture, us uint64, force bool) {
 	le.encMu.Unlock()
 	if err != nil {
 		p.mu.Lock()
-		if p.encs[le.id] == le {
+		current := !p.closed && p.encs[le.id] == le
+		if current {
 			le.force = true
 		}
 		p.mu.Unlock()
-		p.fail(le.id, err)
+		// A layer switched off (LayerActive false) or a Close between
+		// picking the layer and encoding closes the encoder under us:
+		// that's not an encoder failure.
+		if current {
+			p.fail(le.id, err)
+		}
 	}
 }
 

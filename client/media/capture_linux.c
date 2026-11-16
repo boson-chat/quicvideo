@@ -127,6 +127,18 @@ static void *avcapLoop(void *arg) {
     return NULL;
 }
 
+// openInput opens the device non-blocking (AVFMT_FLAG_NONBLOCK: V4L2 opens
+// it O_NONBLOCK), so av_read_frame returns EAGAIN instead of sleeping in
+// VIDIOC_DQBUF. A stalled or wedged camera then can't block Stop's join:
+// the loop sees the stop flag within a few ms and the device is released
+// (STREAMOFF, munmap, close) by avformat_close_input.
+static int openInput(AVFormatContext **fmt, const char *url, const AVInputFormat *ifmt, AVDictionary **opts) {
+    *fmt = avformat_alloc_context();
+    if (!*fmt) return AVERROR(ENOMEM);
+    (*fmt)->flags |= AVFMT_FLAG_NONBLOCK;
+    return avformat_open_input(fmt, url, ifmt, opts); // frees *fmt on failure
+}
+
 qv_avcap *qv_avcap_start(const char *fmtName, const char *url, int w, int h, int fps, uintptr_t handle, char **err) {
     avdevice_register_all();
     const AVInputFormat *ifmt = av_find_input_format(fmtName);
@@ -149,11 +161,11 @@ qv_avcap *qv_avcap_start(const char *fmtName, const char *url, int w, int h, int
     }
     struct qv_avcap *c = calloc(1, sizeof *c);
     c->handle = handle;
-    int r = avformat_open_input(&c->fmt, url, ifmt, &opts);
+    int r = openInput(&c->fmt, url, ifmt, &opts);
     if (r < 0 && strcmp(fmtName, "video4linux2") == 0) {
         // No MJPEG at that size: let the driver pick a raw format.
         av_dict_set(&opts, "input_format", NULL, 0);
-        r = avformat_open_input(&c->fmt, url, ifmt, &opts);
+        r = openInput(&c->fmt, url, ifmt, &opts);
     }
     av_dict_free(&opts);
     if (r < 0) {

@@ -79,6 +79,7 @@ struct qv_lenc {
     struct SwsContext *sws;
     int swsSrcFmt, swsSrcW, swsSrcH;
     AVFrame *conv; // reusable converted frame (NV12 / YUV420P)
+    int sent;      // frames accepted by the libavcodec encoder
     // openh264
     ISVCEncoder *oh;
 };
@@ -316,6 +317,7 @@ int qv_lenc_encode(qv_lenc *e, AVFrame *src, int64_t us, int force) {
     if (force) in->flags |= AV_FRAME_FLAG_KEY;
     else in->flags &= ~AV_FRAME_FLAG_KEY;
     int r = avcodec_send_frame(e->ctx, in);
+    if (r >= 0) e->sent++;
     av_frame_free(&hw);
     if (r < 0) return r;
     return drainAV(e);
@@ -324,8 +326,13 @@ int qv_lenc_encode(qv_lenc *e, AVFrame *src, int64_t us, int force) {
 void qv_lenc_close(qv_lenc *e) {
     if (!e) return;
     if (e->ctx) {
-        avcodec_send_frame(e->ctx, NULL); // flush
-        drainAV(e);
+        // Flush only an encoder that got frames: h264_vaapi (FFmpeg 9)
+        // dereferences NULL flushing one that never encoded, which is the
+        // common case of a layer switched on and straight off again.
+        if (e->sent > 0) {
+            avcodec_send_frame(e->ctx, NULL);
+            drainAV(e);
+        }
         avcodec_free_context(&e->ctx);
     }
     if (e->oh) {

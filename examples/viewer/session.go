@@ -9,6 +9,7 @@ import (
 	"log"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/boson-chat/quicvideo/client"
@@ -29,12 +30,20 @@ type session struct {
 	order     []uint32
 	names     map[uint32]string
 	pinned    uint32
-	camera    *localShare
-	screen    *localShare
+	camera    shareSlot
+	screen    shareSlot
 	preview   *image.RGBA // our camera, small
 	status    string
 	lastTiles []Tile
 	scale     float64
+	closed    bool
+
+	closeOnce sync.Once
+	// publish publishes a local track (tests swap in a fake).
+	publish func(ctx context.Context, kind controlpb.TrackKind, layers []*controlpb.Layer) (publication, error)
+	// stallAfter: a camera that delivers no picture for this long is
+	// treated as stopped (screens only send frames on change).
+	stallAfter time.Duration
 }
 
 type remote struct {
@@ -49,22 +58,79 @@ type remote struct {
 	decoded    int
 }
 
+// publication is a published local track: encoders plus the track.
+type publication interface {
+	Push(media.CapturedFrame)
+	// Close stops the encoders and unpublishes the track.
+	Close()
+}
+
+// shareSlot is the camera or the screen share. gen changes on every start
+// and stop, so a start that finishes after a newer start or a stop knows
+// it's stale and releases its device instead of installing itself.
+type shareSlot struct {
+	gen     uint64
+	pending string        // name while a start is in progress
+	cancel  chan struct{} // closed to abandon the start in progress
+	cur     *localShare
+}
+
 type localShare struct {
-	src   media.Source
+	src  media.Source
+	pub  publication
+	name string
+	once sync.Once
+	done chan struct{}
+}
+
+// stop releases the capture device first (the camera light goes off even
+// if an encoder is slow), then stops the encoders and unpublishes.
+func (ls *localShare) stop() {
+	ls.once.Do(func() {
+		close(ls.done)
+		ls.src.Stop()
+		ls.pub.Close()
+	})
+}
+
+type trackPublication struct {
 	pub   *media.Publisher
 	track *client.LocalTrack
-	name  string
+}
+
+func (t *trackPublication) Push(f media.CapturedFrame) { t.pub.Push(f) }
+func (t *trackPublication) Close() {
+	t.pub.Close()
+	_ = t.track.Unpublish()
 }
 
 func newSession(invalidate func()) *session {
-	return &session{remotes: map[uint32]*remote{}, names: map[uint32]string{}, invalidate: invalidate, scale: 1}
+	s := &session{remotes: map[uint32]*remote{}, names: map[uint32]string{}, invalidate: invalidate, scale: 1,
+		stallAfter: 5 * time.Second}
+	s.publish = s.publishTrack
+	return s
+}
+
+func (s *session) publishTrack(ctx context.Context, kind controlpb.TrackKind, layers []*controlpb.Layer) (publication, error) {
+	c := s.client()
+	if c == nil {
+		return nil, errors.New("not connected")
+	}
+	p, track, err := media.PublishTrack(ctx, c, kind, layers, media.DefaultEncoder, media.PublisherOptions{
+		OnError: func(l uint32, err error) { log.Printf("encoder layer %d: %v", l, err) },
+	})
+	if err != nil {
+		return nil, err
+	}
+	return &trackPublication{pub: p, track: track}, nil
 }
 
 func (s *session) setStatus(format string, args ...any) {
+	msg := fmt.Sprintf(format, args...)
 	s.mu.Lock()
-	s.status = fmt.Sprintf(format, args...)
+	s.status = msg
 	s.mu.Unlock()
-	log.Print(s.status)
+	log.Print(msg)
 	s.invalidate()
 }
 
@@ -324,16 +390,25 @@ func (s *session) labelLocked(r *remote) string {
 
 // ---- local shares ----------------------------------------------------------
 
+func (s *session) slot(kind controlpb.TrackKind) *shareSlot {
+	if kind == controlpb.TrackKind_CAMERA {
+		return &s.camera
+	}
+	return &s.screen
+}
+
+// sharing names the camera/screen share, including one still starting
+// (the UI shows "off" for it, and clicking cancels the start).
 func (s *session) sharing() (camera, screen string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.camera != nil {
-		camera = s.camera.name
+	name := func(sl *shareSlot) string {
+		if sl.cur != nil {
+			return sl.cur.name
+		}
+		return sl.pending
 	}
-	if s.screen != nil {
-		screen = s.screen.name
-	}
-	return
+	return name(&s.camera), name(&s.screen)
 }
 
 // StartCamera starts publishing a camera (cameraID "" = the default:
@@ -359,44 +434,136 @@ func (s *session) StartScreen(ctx context.Context, name string, displayID, windo
 	})
 }
 
-func (s *session) StopCamera() { s.stopShare(&s.camera) }
-func (s *session) StopScreen() { s.stopShare(&s.screen) }
+func (s *session) StopCamera() { s.stopShare(controlpb.TrackKind_CAMERA) }
+func (s *session) StopScreen() { s.stopShare(controlpb.TrackKind_SCREEN) }
 
-func (s *session) stopShare(slot **localShare) {
+// stopShare stops the share, or abandons one that is still starting.
+func (s *session) stopShare(kind controlpb.TrackKind) {
 	s.mu.Lock()
-	ls := *slot
-	*slot = nil
-	if slot == &s.camera {
+	sl := s.slot(kind)
+	sl.gen++
+	if sl.cancel != nil {
+		close(sl.cancel)
+		sl.cancel = nil
+	}
+	pending := sl.pending
+	sl.pending = ""
+	ls := sl.cur
+	sl.cur = nil
+	if kind == controlpb.TrackKind_CAMERA {
 		s.preview = nil
 	}
 	s.mu.Unlock()
-	if ls == nil {
-		return
+	s.invalidate()
+	switch {
+	case ls != nil:
+		ls.stop()
+		s.setStatus("stopped sharing %s", ls.name)
+	case pending != "":
+		s.setStatus("%s: start cancelled", pending)
 	}
-	ls.src.Stop()
-	ls.pub.Close()
-	_ = ls.track.Unpublish()
-	s.setStatus("stopped sharing %s", ls.name)
+}
+
+// shareEnded turns a share off that ended on its own (device error or
+// unplugged, capture interrupted, no pictures): it is unpublished so the
+// others don't keep a frozen tile, and the UI shows it off.
+func (s *session) shareEnded(kind controlpb.TrackKind, ls *localShare, why error) {
+	s.mu.Lock()
+	sl := s.slot(kind)
+	if sl.cur != ls {
+		s.mu.Unlock()
+		return // already stopped or replaced
+	}
+	sl.cur = nil // a start in progress (Change screen) carries on
+	if kind == controlpb.TrackKind_CAMERA {
+		s.preview = nil
+	}
+	s.mu.Unlock()
+	ls.stop()
+	s.setStatus("%s stopped: %v", ls.name, why)
+}
+
+// watch ends a share whose source reports an end (media.Ender) or, for a
+// camera, stops delivering pictures.
+func (s *session) watch(kind controlpb.TrackKind, ls *localShare, lastFrame *atomic.Int64) {
+	var ended <-chan error
+	if e, ok := ls.src.(media.Ender); ok {
+		ended = e.Ended()
+	}
+	var tick <-chan time.Time
+	if kind == controlpb.TrackKind_CAMERA && s.stallAfter > 0 {
+		t := time.NewTicker(max(s.stallAfter/5, 10*time.Millisecond))
+		defer t.Stop()
+		tick = t.C
+	}
+	for {
+		select {
+		case <-ls.done:
+			return
+		case err := <-ended:
+			s.shareEnded(kind, ls, err)
+			return
+		case <-tick:
+			if since := time.Since(time.Unix(0, lastFrame.Load())); since > s.stallAfter {
+				s.shareEnded(kind, ls, fmt.Errorf("no picture for %v", s.stallAfter))
+				return
+			}
+		}
+	}
 }
 
 // startShare starts a source, learns its size from the first frame, and
-// publishes a track with the matching layer ladder.
+// publishes a track with the matching layer ladder. A stop (or a newer
+// start, or Close) while it runs wins: the source is released and nothing
+// is published.
 func (s *session) startShare(ctx context.Context, kind controlpb.TrackKind, name string, start func(func(media.CapturedFrame)) (media.Source, error)) {
-	c := s.client()
-	if c == nil {
+	isCamera := kind == controlpb.TrackKind_CAMERA
+	s.mu.Lock()
+	if s.closed {
+		s.mu.Unlock()
 		return
 	}
-	isCamera := kind == controlpb.TrackKind_CAMERA
+	sl := s.slot(kind)
+	sl.gen++
+	gen := sl.gen
+	if sl.cancel != nil {
+		close(sl.cancel) // a start still in progress is superseded
+	}
+	cancel := make(chan struct{})
+	sl.cancel = cancel
+	sl.pending = name
+	s.mu.Unlock()
+	s.invalidate()
+
+	live := func() bool {
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		return !s.closed && sl.gen == gen
+	}
+	fail := func(format string, args ...any) {
+		s.mu.Lock()
+		if sl.gen == gen {
+			sl.pending = ""
+			sl.cancel = nil
+		}
+		s.mu.Unlock()
+		s.setStatus(format, args...)
+	}
+
 	var mu sync.Mutex
-	var pub *media.Publisher
+	var pub publication
 	var lastPreview time.Time
+	var lastFrame atomic.Int64
 	sized := make(chan [2]int, 1)
 	push := func(f media.CapturedFrame) {
+		lastFrame.Store(time.Now().UnixNano())
 		if isCamera && time.Since(lastPreview) > 66*time.Millisecond { // self-preview at ~15 fps
 			lastPreview = time.Now()
 			if img, err := media.ToRGBA(f.Picture, 480); err == nil {
 				s.mu.Lock()
-				s.preview = img
+				if sl.gen == gen && !s.closed {
+					s.preview = img
+				}
 				s.mu.Unlock()
 				s.invalidate()
 			}
@@ -418,9 +585,9 @@ func (s *session) startShare(ctx context.Context, kind controlpb.TrackKind, name
 	if err != nil {
 		var pe *media.PermissionError
 		if errors.As(err, &pe) {
-			s.setStatus("%s not shared — %s permission missing: %s", name, pe.What, pe.Help)
+			fail("%s not shared — %s permission missing: %s", name, pe.What, pe.Help)
 		} else {
-			s.setStatus("%s not shared: %v", name, err)
+			fail("%s not shared: %v", name, err)
 		}
 		return
 	}
@@ -429,41 +596,46 @@ func (s *session) startShare(ctx context.Context, kind controlpb.TrackKind, name
 	case wh = <-sized:
 	case <-time.After(10 * time.Second):
 		wh[0], wh[1] = src.Size()
+	case <-cancel: // stopped (or restarted) while starting
+		src.Stop()
+		return
+	}
+	if !live() {
+		src.Stop()
+		return
 	}
 	if wh[0] == 0 || wh[1] == 0 {
 		src.Stop()
-		s.setStatus("%s not shared: it delivered no picture in 10 s (in use by another app?)", name)
+		fail("%s not shared: it delivered no picture in 10 s (in use by another app?)", name)
 		return
 	}
 	layers := media.CameraLayers(wh[0], wh[1], src.FPS())
 	if !isCamera {
 		layers = media.ScreenLayers(wh[0], wh[1])
 	}
-	p, track, err := media.PublishTrack(ctx, c, kind, layers, media.DefaultEncoder, media.PublisherOptions{
-		OnError: func(l uint32, err error) { log.Printf("encoder layer %d: %v", l, err) },
-	})
+	p, err := s.publish(ctx, kind, layers)
 	if err != nil {
 		src.Stop()
-		s.setStatus("publishing %s failed: %v", name, err)
+		fail("publishing %s failed: %v", name, err)
 		return
 	}
+	ls := &localShare{src: src, pub: p, name: name, done: make(chan struct{})}
+	s.mu.Lock()
+	if s.closed || sl.gen != gen {
+		s.mu.Unlock()
+		ls.stop()
+		return
+	}
+	old := sl.cur
+	sl.cur, sl.pending, sl.cancel = ls, "", nil
+	s.mu.Unlock()
 	mu.Lock()
 	pub = p
 	mu.Unlock()
-	ls := &localShare{src: src, pub: p, track: track, name: name}
-	s.mu.Lock()
-	slot := &s.screen
-	if isCamera {
-		slot = &s.camera
-	}
-	old := *slot
-	*slot = ls
-	s.mu.Unlock()
 	if old != nil {
-		old.src.Stop()
-		old.pub.Close()
-		_ = old.track.Unpublish()
+		old.stop()
 	}
+	go s.watch(kind, ls, &lastFrame)
 	var desc []string
 	for _, l := range layers {
 		desc = append(desc, fmt.Sprintf("%dp@%d", l.GetHeight(), l.GetFps()))
@@ -471,12 +643,19 @@ func (s *session) startShare(ctx context.Context, kind controlpb.TrackKind, name
 	s.setStatus("sharing %s %dx%d (%s)", name, wh[0], wh[1], strings.Join(desc, ", "))
 }
 
-// Close leaves the call.
+// Close leaves the call: every share is stopped (devices released, tracks
+// unpublished) and no new one can start. Safe to call more than once and
+// from any goroutine.
 func (s *session) Close() {
-	s.StopCamera()
-	s.StopScreen()
-	if c := s.client(); c != nil {
-		_ = c.Leave()
-		_ = c.Close()
-	}
+	s.closeOnce.Do(func() {
+		s.mu.Lock()
+		s.closed = true
+		s.mu.Unlock()
+		s.StopCamera()
+		s.StopScreen()
+		if c := s.client(); c != nil {
+			_ = c.Leave()
+			_ = c.Close()
+		}
+	})
 }

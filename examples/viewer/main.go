@@ -26,13 +26,15 @@ import (
 	"image/png"
 	"log"
 	"os"
+	"os/signal"
 	"sort"
 	"strings"
+	"sync"
+	"syscall"
 	"time"
 
 	"gioui.org/app"
 	"gioui.org/font/gofont"
-	"gioui.org/io/system"
 	"gioui.org/layout"
 	"gioui.org/op"
 	"gioui.org/op/clip"
@@ -111,6 +113,28 @@ func printDevices() {
 	}
 }
 
+// quitter returns the one way out: leave the call (shares stopped, devices
+// released, tracks unpublished), then exit. If leaving hangs, exit anyway
+// after 5 s; the OS releases devices of an exited process.
+func quitter(s *session) func() {
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			done := make(chan struct{})
+			go func() {
+				s.Close()
+				close(done)
+			}()
+			select {
+			case <-done:
+			case <-time.After(5 * time.Second):
+				log.Print("leaving took over 5 s; exiting anyway")
+			}
+			os.Exit(0)
+		})
+	}
+}
+
 // ui holds the widgets' state.
 type ui struct {
 	th                                *material.Theme
@@ -121,6 +145,7 @@ type ui struct {
 	tileBtns                          map[uint32]*widget.Clickable
 	visible                           bool
 	snapDue                           time.Time
+	quit                              func()
 }
 
 type source struct {
@@ -148,10 +173,21 @@ func run(w *app.Window) error {
 			s.StartScreen(ctx, "main display", 0, 0)
 		}
 	}()
+	// Quitting doesn't go through closing the window: on macOS AppKit
+	// ignores performClose: while ScreenCaptureKit shares the display, so
+	// -quit-after and Leave never got a DestroyEvent and the viewer (and its
+	// camera) kept running.
+	quit := quitter(s)
 	if *quitAfter > 0 {
-		time.AfterFunc(*quitAfter, func() { w.Perform(system.ActionClose) })
+		time.AfterFunc(*quitAfter, quit)
 	}
-	u := &ui{th: material.NewTheme(), tileBtns: map[uint32]*widget.Clickable{}, visible: true}
+	sigs := make(chan os.Signal, 1)
+	signal.Notify(sigs, os.Interrupt, syscall.SIGTERM)
+	go func() {
+		<-sigs
+		quit()
+	}()
+	u := &ui{th: material.NewTheme(), tileBtns: map[uint32]*widget.Clickable{}, visible: true, quit: quit}
 	u.th.Shaper = text.NewShaper(text.WithCollection(gofont.Collection()))
 	u.th.Palette = material.Palette{Bg: color.NRGBA{15, 17, 21, 255}, Fg: color.NRGBA{230, 232, 235, 255},
 		ContrastBg: color.NRGBA{58, 110, 220, 255}, ContrastFg: color.NRGBA{255, 255, 255, 255}}
@@ -212,7 +248,7 @@ func (u *ui) frame(gtx layout.Context, ctx context.Context, s *session, w *app.W
 		go s.StopScreen()
 	}
 	if u.leave.Clicked(gtx) {
-		w.Perform(system.ActionClose) // → DestroyEvent → leave
+		go u.quit()
 	}
 	for i := range u.srcBtns {
 		if u.srcBtns[i].Clicked(gtx) {

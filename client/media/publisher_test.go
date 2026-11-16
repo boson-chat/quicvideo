@@ -237,3 +237,57 @@ func TestPublisherEncoderErrors(t *testing.T) {
 
 var _ TrackWriter = (*client.LocalTrack)(nil)
 var _ = controlpb.TrackKind_CAMERA
+
+// closingEnc fails once closed, like the platform encoders.
+type closingEnc struct {
+	mu     sync.Mutex
+	closed bool
+}
+
+func (e *closingEnc) Encode(Picture, uint64, bool) error {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.closed {
+		return errors.New("media: encoder closed")
+	}
+	return nil
+}
+func (e *closingEnc) Close() { e.mu.Lock(); e.closed = true; e.mu.Unlock() }
+
+// A layer switched off (or the publisher closed) between Push picking it
+// and the encode running isn't an encoder error (seen as "encoder layer 0:
+// media: encoder closed" when the relay paused a layer mid-call).
+func TestPublisherClosedEncoderMidPushIsNotAnError(t *testing.T) {
+	var errs atomic.Int32
+	p := NewPublisher(&fakeTrack{}, CameraLayers(1280, 720, 30), func(EncoderConfig, func(EncodedFrame)) (Encoder, error) {
+		return &closingEnc{}, nil
+	}, PublisherOptions{OnError: func(uint32, error) { errs.Add(1) }})
+	pic := &fakePic{}
+	pic.Retain()
+	p.SetActive(0, true)
+	p.SetActive(1, true)
+	p.mu.Lock()
+	le0, le1 := p.encs[0], p.encs[1]
+	p.mu.Unlock()
+
+	p.SetActive(0, false) // the relay switched layer 0 off
+	p.encode(le0, pic, 1, false)
+	p.Close()
+	p.encode(le1, pic, 2, false)
+	if n := errs.Load(); n != 0 {
+		t.Fatalf("%d errors reported for encoders closed on purpose", n)
+	}
+
+	// A real failure on a live layer is still reported.
+	q := NewPublisher(&fakeTrack{}, CameraLayers(1280, 720, 30), func(EncoderConfig, func(EncodedFrame)) (Encoder, error) {
+		return &closingEnc{closed: true}, nil
+	}, PublisherOptions{OnError: func(uint32, error) { errs.Add(1) }})
+	q.SetActive(0, true)
+	q.mu.Lock()
+	le := q.encs[0]
+	q.mu.Unlock()
+	q.encode(le, pic, 3, false)
+	if errs.Load() != 1 {
+		t.Fatal("an encode failure on an active layer must be reported")
+	}
+}
