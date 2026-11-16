@@ -99,8 +99,7 @@ type nativeSource struct {
 	once      sync.Once
 	mu        sync.Mutex
 	stopped   bool
-	err       error
-	onStop    func(error)
+	ended
 }
 
 func (s *nativeSource) Size() (int, int) { s.mu.Lock(); defer s.mu.Unlock(); return s.w, s.h }
@@ -155,7 +154,7 @@ func StartScreen(o ScreenOptions, push func(CapturedFrame)) (Source, error) {
 			}
 		}
 	}
-	s := &nativeSource{fps: o.FPS, push: push, w: w, h: h}
+	s := &nativeSource{fps: o.FPS, push: push, w: w, h: h, ended: newEnded()}
 	s.handle = cgo.NewHandle(s)
 	var errp *C.char
 	sc := C.qv_screen_start(C.uint32_t(o.DisplayID), C.uint32_t(o.WindowID), C.int(w), C.int(h), C.int(o.FPS),
@@ -168,22 +167,43 @@ func StartScreen(o ScreenOptions, push func(CapturedFrame)) (Source, error) {
 	return s, nil
 }
 
+// sourceFor resolves a callback's handle. A callback racing with Stop
+// (which deletes the handle once the native side is drained) finds none.
+func sourceFor(handle C.uintptr_t) (s *nativeSource) {
+	defer func() {
+		if recover() != nil {
+			s = nil
+		}
+	}()
+	s, _ = cgo.Handle(handle).Value().(*nativeSource)
+	return s
+}
+
 //export qvGoScreenFrame
 func qvGoScreenFrame(handle C.uintptr_t, pb unsafe.Pointer, us C.int64_t) {
-	cgo.Handle(handle).Value().(*nativeSource).frame(pb, int64(us))
+	if s := sourceFor(handle); s != nil {
+		s.frame(pb, int64(us))
+	}
 }
 
 //export qvGoScreenStopped
 func qvGoScreenStopped(handle C.uintptr_t, code C.int, msg *C.char) {
-	s := cgo.Handle(handle).Value().(*nativeSource)
 	err := cerr(msg)
-	s.mu.Lock()
-	s.err = err
-	f := s.onStop
-	s.mu.Unlock()
-	if f != nil {
-		f(err)
+	s := sourceFor(handle)
+	if s == nil {
+		return
 	}
+	s.mu.Lock()
+	stopping := s.stopped
+	s.mu.Unlock()
+	if !stopping {
+		s.end(err)
+	}
+}
+
+//export qvGoCameraStopped
+func qvGoCameraStopped(handle C.uintptr_t, msg *C.char) {
+	qvGoScreenStopped(handle, 0, msg)
 }
 
 func cameraPermissionError(p Permission) error {
@@ -240,7 +260,7 @@ func StartCamera(o CameraOptions, push func(CapturedFrame)) (Source, error) {
 	if o.FPS <= 0 {
 		o.FPS = 30
 	}
-	s := &nativeSource{fps: o.FPS, push: push}
+	s := &nativeSource{fps: o.FPS, push: push, ended: newEnded()}
 	s.handle = cgo.NewHandle(s)
 	id := C.CString(o.ID)
 	defer C.free(unsafe.Pointer(id))
@@ -256,7 +276,9 @@ func StartCamera(o CameraOptions, push func(CapturedFrame)) (Source, error) {
 
 //export qvGoCameraFrame
 func qvGoCameraFrame(handle C.uintptr_t, pb unsafe.Pointer, us C.int64_t) {
-	cgo.Handle(handle).Value().(*nativeSource).frame(pb, int64(us))
+	if s := sourceFor(handle); s != nil {
+		s.frame(pb, int64(us))
+	}
 }
 
 // DefaultEncoder is the platform's hardware encoder factory.

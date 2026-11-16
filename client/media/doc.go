@@ -33,5 +33,33 @@ type Source interface {
 	Size() (w, h int)
 	// FPS is the capture rate cap.
 	FPS() int
+	// Stop ends the capture and releases the device. After it returns no
+	// more frames are pushed. Safe to call more than once.
 	Stop()
+}
+
+// Ender is implemented by sources that can end on their own: the camera
+// was unplugged or failed, the OS interrupted capture, the user stopped the
+// share from the system UI. Ended delivers the reason once. It doesn't fire
+// for Stop. The source still needs Stop to release everything.
+type Ender interface {
+	Ended() <-chan error
+}
+
+// ended is a one-shot Ended channel for sources.
+type ended struct{ ch chan error }
+
+func newEnded() ended { return ended{ch: make(chan error, 1)} }
+
+func (e ended) Ended() <-chan error { return e.ch }
+
+// end reports the first reason; later ones are dropped.
+func (e ended) end(err error) {
+	if err == nil {
+		err = errors.New("media: capture ended")
+	}
+	select {
+	case e.ch <- err:
+	default:
+	}
 }
