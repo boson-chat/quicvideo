@@ -352,3 +352,7 @@ func qvGoCameraFrame(handle C.uintptr_t, pb unsafe.Pointer, us C.int64_t) {
 
 // DefaultEncoder is the platform's hardware encoder factory.
 var DefaultEncoder EncoderFactory = NewVTEncoder
+
+// StopThumbnails: macOS thumbnails are one-shot screenshots; nothing runs
+// between them.
+func StopThumbnails() {}

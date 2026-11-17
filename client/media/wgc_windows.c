@@ -69,6 +69,20 @@ struct QVSession2 {
     const QVSession2Vtbl *lpVtbl;
 };
 
+// IGraphicsCaptureSession3 (Windows 11; UniversalApiContract 12): whether
+// Windows draws its yellow "being captured" border. Asked for thumbnails
+// only (a share keeps it). Where the interface or the setting isn't there,
+// the border stays, nothing else changes.
+typedef struct QVSession3 QVSession3;
+typedef struct {
+    IINSPECTABLE_METHODS(QVSession3)
+    HRESULT(STDMETHODCALLTYPE *get_IsBorderRequired)(QVSession3 *This, boolean *v);
+    HRESULT(STDMETHODCALLTYPE *put_IsBorderRequired)(QVSession3 *This, boolean v);
+} QVSession3Vtbl;
+struct QVSession3 {
+    const QVSession3Vtbl *lpVtbl;
+};
+
 typedef struct QVFrame QVFrame;
 typedef struct {
     IINSPECTABLE_METHODS(QVFrame)
@@ -150,6 +164,7 @@ static const IID IID_QVItemInterop = {0x3628e81b, 0x3cac, 0x4c60, {0xb7, 0xf4, 0
 static const IID IID_QVFramePoolStatics2 = {0x589b103f, 0x6bbc, 0x5df5, {0xa9, 0x91, 0x02, 0xe2, 0x8b, 0x3b, 0x66, 0xd5}};
 static const IID IID_QVSessionStatics = {0x2224a540, 0x5974, 0x49aa, {0xb2, 0x32, 0x08, 0x82, 0x53, 0x6f, 0x4c, 0xb5}};
 static const IID IID_QVSession2 = {0x2c39ae40, 0x7d2e, 0x5044, {0x80, 0x4e, 0x8b, 0x67, 0x99, 0xd4, 0xcf, 0x9e}};
+static const IID IID_QVSession3 = {0xf2cdd966, 0x22ae, 0x5ea1, {0x95, 0x96, 0x3a, 0x28, 0x93, 0x44, 0xc3, 0xbe}};
 static const IID IID_QVDxgiAccess = {0xa9b3d012, 0x3df2, 0x4ee3, {0xb8, 0xd1, 0x86, 0x95, 0xf4, 0x57, 0xd3, 0xc1}};
 static const IID IID_QVClosable = {0x30d5a829, 0x7fa4, 0x4026, {0x83, 0xbb, 0xd7, 0x5b, 0xae, 0x4e, 0xa9, 0x9e}};
 static const IID IID_QVDirect3DDevice = {0xa37624ab, 0x8d5f, 0x4650, {0x9d, 0x3e, 0x9e, 0xae, 0x3d, 0x9b, 0xc6, 0x70}};
@@ -368,7 +383,7 @@ static void wgcFree(struct qv_wgc *c) {
     free(c);
 }
 
-qv_wgc *qv_wgc_start(int monitor, uintptr_t hwnd, int fps, int cursor, uintptr_t handle, char **err) {
+qv_wgc *qv_wgc_start(int monitor, uintptr_t hwnd, int fps, int cursor, int borderless, uintptr_t handle, char **err) {
     RoInitialize(RO_INIT_MULTITHREADED);
     struct qv_wgc *c = calloc(1, sizeof *c);
     c->handle = handle;
@@ -429,6 +444,13 @@ qv_wgc *qv_wgc_start(int monitor, uintptr_t hwnd, int fps, int cursor, uintptr_t
     if (SUCCEEDED(c->session->lpVtbl->QueryInterface(c->session, &IID_QVSession2, (void **)&s2))) {
         s2->lpVtbl->put_IsCursorCaptureEnabled(s2, cursor ? 1 : 0);
         s2->lpVtbl->Release(s2);
+    }
+    if (borderless) {
+        QVSession3 *s3 = NULL;
+        if (SUCCEEDED(c->session->lpVtbl->QueryInterface(c->session, &IID_QVSession3, (void **)&s3))) {
+            s3->lpVtbl->put_IsBorderRequired(s3, 0);
+            s3->lpVtbl->Release(s3);
+        }
     }
     if (FAILED(hr = c->session->lpVtbl->StartCapture(c->session))) {
         *err = hrerr2("StartCapture failed", hr);

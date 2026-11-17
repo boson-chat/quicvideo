@@ -361,7 +361,7 @@ func StartScreen(o ScreenOptions, push func(CapturedFrame)) (Source, error) {
 	s := &winSource{fps: o.FPS, push: push}
 	s.handle = cgo.NewHandle(s)
 	var errp *C.char
-	c := C.qv_wgc_start(C.int(monitor), C.uintptr_t(o.WindowID), C.int(o.FPS), cbool(o.Cursor), C.uintptr_t(s.handle), &errp)
+	c := C.qv_wgc_start(C.int(monitor), C.uintptr_t(o.WindowID), C.int(o.FPS), cbool(o.Cursor), 0, C.uintptr_t(s.handle), &errp)
 	if c == nil {
 		s.handle.Delete()
 		return nil, cerr(errp)

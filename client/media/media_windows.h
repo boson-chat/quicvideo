@@ -45,8 +45,9 @@ void qv_cam_stop(qv_wcam *c);
 char *qv_wgc_list(void); // lines: "D\tid\tw\th\tprimary" and "W\thwnd\tw\th\ttitle"
 int qv_wgc_supported(void);
 typedef struct qv_wgc qv_wgc;
-// monitor index (0 = primary) or hwnd (when nonzero).
-qv_wgc *qv_wgc_start(int monitor, uintptr_t hwnd, int fps, int cursor, uintptr_t handle, char **err);
+// monitor index (0 = primary) or hwnd (when nonzero). borderless: ask
+// Windows 11 not to draw its capture border (thumbnails).
+qv_wgc *qv_wgc_start(int monitor, uintptr_t hwnd, int fps, int cursor, int borderless, uintptr_t handle, char **err);
 void qv_wgc_stop(qv_wgc *c);
 
 #endif
