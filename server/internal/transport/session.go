@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"slices"
 	"sync"
 	"time"
 
@@ -25,6 +26,7 @@ type session struct {
 	id   uint32
 
 	ident  *auth.Identity // read loop only
+	caps   []string       // the client's Hello capabilities
 	out    chan *controlpb.ControlMessage
 	expiry chan time.Time // new token expiry (Refresh) → watchExpiry
 
@@ -108,6 +110,7 @@ func (ss *session) run(ctx context.Context) error {
 	}
 	_ = ctrl.SetReadDeadline(time.Time{})
 	ss.ident = ident
+	ss.caps = hello.GetCapabilities()
 	m.Handshake(metrics.HandshakeOK)
 	m.SessionOpened()
 	defer m.SessionClosed()
@@ -121,6 +124,7 @@ func (ss *session) run(ctx context.Context) error {
 		MaxLayers:       uint32(rc.MaxLayers),
 		MaxTrackBitrate: rc.MaxTrackBitrate,
 		TokenExpiresAt:  unix(ident.ExpiresAt),
+		Capabilities:    []string{relay.CapScreenAudio},
 	}}}
 
 	ctx, cancelAll := context.WithCancel(ctx)
@@ -244,6 +248,7 @@ func (ss *session) join(room string) {
 	}
 	mem, state, err := ss.s.relay.Join(ss, relay.Participant{
 		UserID: ss.ident.UserID, DisplayName: ss.ident.DisplayName, CanPublish: ss.ident.CanPublish(),
+		ScreenAudio: slices.Contains(ss.caps, relay.CapScreenAudio),
 	}, room)
 	if err != nil {
 		ss.SendControl(errMsg(errCode(err), err.Error(), false, ""))

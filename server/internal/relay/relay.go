@@ -177,18 +177,28 @@ type room struct {
 }
 
 func (rm *room) broadcast(msg *controlpb.ControlMessage, except uint32) {
+	// A screen share's sound is only announced to clients that know what
+	// it is: older ones would take it for a video track.
+	sound := msg.GetTrackAdded().GetTrack().GetKind() == controlpb.TrackKind_SCREEN_AUDIO
 	for id, mem := range rm.members {
-		if id != except {
+		if id != except && (!sound || mem.info.ScreenAudio) {
 			mem.peer.SendControl(msg)
 		}
 	}
 }
+
+// CapScreenAudio is the Hello / Welcome capability for screen share sound
+// (docs/screen-audio.md): the server relays SCREEN_AUDIO tracks, and the
+// client wants to hear about them.
+const CapScreenAudio = "screen-audio"
 
 // Participant is the public identity of a member.
 type Participant struct {
 	UserID      string
 	DisplayName string
 	CanPublish  bool
+	// ScreenAudio: the client said it handles SCREEN_AUDIO tracks.
+	ScreenAudio bool
 }
 
 // Member is a peer that joined a room.
@@ -251,6 +261,9 @@ func (r *Relay) Join(peer Peer, info Participant, roomName string) (*Member, *co
 		state.Participants = append(state.Participants, o.participant())
 	}
 	for _, t := range rm.tracks {
+		if t.kind == controlpb.TrackKind_SCREEN_AUDIO && !info.ScreenAudio {
+			continue
+		}
 		state.Tracks = append(state.Tracks, t.proto())
 	}
 	rm.broadcast(&controlpb.ControlMessage{Msg: &controlpb.ControlMessage_ParticipantJoined{
@@ -297,7 +310,18 @@ func (m *Member) Publish(req *controlpb.Publish) (uint32, error) {
 		return 0, ErrNotOwner
 	}
 	kind := req.GetKind()
-	if kind != controlpb.TrackKind_CAMERA && kind != controlpb.TrackKind_SCREEN {
+	switch kind {
+	case controlpb.TrackKind_CAMERA, controlpb.TrackKind_SCREEN:
+		if req.GetForTrackId() != 0 {
+			return 0, ErrBadRequest
+		}
+	case controlpb.TrackKind_SCREEN_AUDIO:
+		// One layer, for one of the publisher's own screen shares (checked
+		// below, under the lock).
+		if req.GetForTrackId() == 0 || len(req.GetLayers()) != 1 {
+			return 0, ErrBadRequest
+		}
+	default:
 		return 0, ErrBadRequest
 	}
 	if req.GetCodec() == "" || len(req.GetCodec()) > 32 {
@@ -331,8 +355,20 @@ func (m *Member) Publish(req *controlpb.Publish) (uint32, error) {
 	if len(m.tracks) >= r.opts.MaxTracksPerSession {
 		return 0, ErrLimit
 	}
+	if kind == controlpb.TrackKind_SCREEN_AUDIO {
+		parent := m.tracks[req.GetForTrackId()]
+		if parent == nil || parent.kind != controlpb.TrackKind_SCREEN {
+			return 0, ErrBadRequest
+		}
+		for _, o := range m.tracks {
+			if o.forTrack == parent.id {
+				return 0, ErrBadRequest // one sound per share
+			}
+		}
+	}
 	r.nextTrack++
 	t := newTrack(r, m, r.nextTrack, kind, req.GetCodec(), layers, total)
+	t.forTrack = req.GetForTrackId()
 	m.tracks[t.id] = t
 	m.room.tracks[t.id] = t
 	r.tracks[t.id] = t
@@ -363,6 +399,9 @@ func (m *Member) Unpublish(trackID uint32) error {
 func (m *Member) unpublishLocked(trackID uint32) {
 	r := m.r
 	t := m.tracks[trackID]
+	if t == nil {
+		return // already gone (a share's sound, removed with its share)
+	}
 	delete(m.tracks, trackID)
 	delete(r.tracks, trackID)
 	if m.room != nil {
@@ -373,6 +412,12 @@ func (m *Member) unpublishLocked(trackID uint32) {
 	}
 	t.close()
 	r.m.TrackRemoved(t.screen())
+	// A share's sound goes with it.
+	for id, o := range m.tracks {
+		if o.forTrack == trackID {
+			m.unpublishLocked(id)
+		}
+	}
 	if m.room != nil {
 		m.room.broadcast(&controlpb.ControlMessage{Msg: &controlpb.ControlMessage_TrackRemoved{
 			TrackRemoved: &controlpb.TrackRemoved{TrackId: trackID}}}, m.peer.ID())

@@ -19,6 +19,7 @@
 
 extern void qvGoScreenFrame(uintptr_t handle, void *pb, int64_t us);
 extern void qvGoScreenStopped(uintptr_t handle, int code, char *msg);
+extern void qvGoScreenAudio(uintptr_t handle, float *pcm, int n, int rate, int64_t us);
 extern void qvGoCameraFrame(uintptr_t handle, void *pb, int64_t us);
 extern void qvGoCameraStopped(uintptr_t handle, char *msg);
 
@@ -70,12 +71,13 @@ int qv_camera_request(int timeout_ms) {
 int qv_screen_access(void) { return -1; }
 void qv_screen_request(void) {}
 int qv_screen_supported(void) { return 0; }
+int qv_screen_audio_supported(void) { return 0; }
 char *qv_screen_list(char **err) {
     *err = strdup("screen sharing isn't available on this device yet");
     return NULL;
 }
 qv_screen *qv_screen_start(uint32_t display_id, uint32_t window_id, int width, int height, int max_width, int fps, int show_cursor,
-                           uintptr_t handle, char **err) {
+                           int audio, uintptr_t handle, char **err) {
     *err = strdup("screen sharing isn't available on this device yet");
     return NULL;
 }

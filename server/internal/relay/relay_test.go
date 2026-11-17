@@ -556,3 +556,67 @@ func TestRoomFull(t *testing.T) {
 		t.Fatalf("want ErrRoomFull, got %v", err)
 	}
 }
+
+// A screen share's sound: tied to the publisher's own screen share, one
+// layer, one per share, at screen priority, and removed with its share.
+func TestScreenAudio(t *testing.T) {
+	e := newEnv(t, Options{}, false)
+	l := []*controlpb.Layer{{Id: 0, Bitrate: 64_000}}
+	audio := func(forID uint32) *controlpb.Publish {
+		return &controlpb.Publish{Kind: controlpb.TrackKind_SCREEN_AUDIO, Codec: "opus", Layers: l, ForTrackId: forID}
+	}
+	screen, err := e.pub.Publish(&controlpb.Publish{Kind: controlpb.TrackKind_SCREEN, Codec: "h264", Layers: []*controlpb.Layer{{Id: 0, Bitrate: 1}}})
+	must(t, err)
+	for i, p := range []*controlpb.Publish{
+		audio(0),       // for nothing
+		audio(e.track), // a camera
+		audio(999),     // not theirs
+		{Kind: controlpb.TrackKind_SCREEN_AUDIO, Codec: "opus", Layers: []*controlpb.Layer{{Id: 0, Bitrate: 1}, {Id: 1, Bitrate: 1}}, ForTrackId: screen}, // two layers
+		{Kind: controlpb.TrackKind_SCREEN, Codec: "h264", Layers: l, ForTrackId: screen},                                                                  // only sound has a for_track_id
+	} {
+		if _, err := e.pub.Publish(p); !errors.Is(err, ErrBadRequest) {
+			t.Errorf("case %d: got %v, want bad request", i, err)
+		}
+	}
+	// A viewer that handles sound tracks; e.sub (an older client) doesn't.
+	newP := newPeer(3)
+	viewer, _, err := e.r.Join(newP, Participant{UserID: "dave", ScreenAudio: true}, "room")
+	must(t, err)
+	snd, err := e.pub.Publish(audio(screen))
+	must(t, err)
+	if e.subP.has(func(m *controlpb.ControlMessage) bool { return m.GetTrackAdded().GetTrack().GetTrackId() == snd }) {
+		t.Fatal("an older client was told about the sound")
+	}
+	_, state, err := e.r.Join(newPeer(4), Participant{UserID: "erin"}, "room")
+	must(t, err)
+	for _, tr := range state.GetTracks() {
+		if tr.GetTrackId() == snd {
+			t.Fatal("an older client's room state lists the sound")
+		}
+	}
+	if _, err := e.pub.Publish(audio(screen)); !errors.Is(err, ErrBadRequest) {
+		t.Errorf("a second sound for one share: %v", err)
+	}
+	if !newP.has(func(m *controlpb.ControlMessage) bool {
+		tr := m.GetTrackAdded().GetTrack()
+		return tr.GetTrackId() == snd && tr.GetKind() == controlpb.TrackKind_SCREEN_AUDIO && tr.GetForTrackId() == screen
+	}) {
+		t.Fatal("no TrackAdded for the sound, tied to its share")
+	}
+	// Screen priority.
+	must(t, viewer.Subscribe(snd, 0, 0))
+	in, err := e.pub.OpenGroup(wire.GroupHeader{TrackID: snd, Group: 1})
+	must(t, err)
+	must(t, in.Frame(frame(true, 80, 'a')))
+	if w := newP.nextWriter(t); w.urgency != 1 {
+		t.Fatalf("sound urgency %d, want 1", w.urgency)
+	}
+	// Gone with its share.
+	must(t, e.pub.Unpublish(screen))
+	if !newP.has(func(m *controlpb.ControlMessage) bool { return m.GetTrackRemoved().GetTrackId() == snd }) {
+		t.Fatal("the sound outlived its share")
+	}
+	if err := e.pub.Unpublish(snd); !errors.Is(err, ErrTrackNotFound) {
+		t.Fatalf("unpublish the removed sound: %v", err)
+	}
+}

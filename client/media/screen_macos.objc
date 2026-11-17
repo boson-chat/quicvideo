@@ -88,6 +88,11 @@ API_AVAILABLE(macos(12.3))
 @property(atomic) uintptr_t handle;
 @end
 
+int qv_screen_audio_supported(void) {
+    if (@available(macOS 13.0, *)) return qv_screen_supported();
+    return 0;
+}
+
 // presentationUS is when the frame was on screen, as wall-clock µs: its
 // presentation time on the host clock (exact display refreshes, 33.3 ms
 // apart at 30 fps), not when the callback ran (which wanders by several
@@ -101,9 +106,63 @@ static uint64_t presentationUS(CMSampleBufferRef sb) {
     return now - (uint64_t)(ago * 1e6);
 }
 
+// screenAudio hands a buffer of the share's sound to Go: mono float (the
+// channels averaged), its sample rate, and its first sample's capture time.
+static void screenAudio(uintptr_t handle, CMSampleBufferRef sb) {
+    CMFormatDescriptionRef fd = CMSampleBufferGetFormatDescription(sb);
+    const AudioStreamBasicDescription *asbd = fd ? CMAudioFormatDescriptionGetStreamBasicDescription(fd) : NULL;
+    if (asbd == NULL || asbd->mFormatID != kAudioFormatLinearPCM || !(asbd->mFormatFlags & kAudioFormatFlagIsFloat) ||
+        asbd->mBitsPerChannel != 32 || asbd->mChannelsPerFrame < 1)
+        return;
+    CMItemCount frames = CMSampleBufferGetNumSamples(sb);
+    if (frames <= 0) return;
+    size_t need = 0;
+    if (CMSampleBufferGetAudioBufferListWithRetainedBlockBuffer(sb, &need, NULL, 0, NULL, NULL, 0, NULL) != noErr) return;
+    AudioBufferList *abl = malloc(need);
+    CMBlockBufferRef bb = NULL;
+    if (CMSampleBufferGetAudioBufferListWithRetainedBlockBuffer(sb, NULL, abl, need, NULL, NULL,
+                                                                kCMSampleBufferFlag_AudioBufferList_Assure16ByteAlignment, &bb) != noErr) {
+        free(abl);
+        return;
+    }
+    float *mono = malloc((size_t)frames * sizeof(float));
+    UInt32 ch = asbd->mChannelsPerFrame;
+    if (asbd->mFormatFlags & kAudioFormatFlagIsNonInterleaved) {
+        UInt32 nb = abl->mNumberBuffers;
+        for (CMItemCount i = 0; i < frames; i++) {
+            float sum = 0;
+            for (UInt32 b = 0; b < nb; b++) {
+                if (abl->mBuffers[b].mDataByteSize >= (i + 1) * sizeof(float)) sum += ((float *)abl->mBuffers[b].mData)[i];
+            }
+            mono[i] = sum / (float)nb;
+        }
+    } else {
+        float *p = (float *)abl->mBuffers[0].mData;
+        CMItemCount have = abl->mBuffers[0].mDataByteSize / (sizeof(float) * ch);
+        for (CMItemCount i = 0; i < frames; i++) {
+            float sum = 0;
+            if (i < have)
+                for (UInt32 c = 0; c < ch; c++) sum += p[i * ch + c];
+            mono[i] = sum / (float)ch;
+        }
+    }
+    qvGoScreenAudio(handle, mono, (int)frames, (int)asbd->mSampleRate, (int64_t)presentationUS(sb));
+    free(mono);
+    free(abl);
+    if (bb) CFRelease(bb);
+}
+
 @implementation QVScreenOutput
 - (void)stream:(SCStream *)stream didOutputSampleBuffer:(CMSampleBufferRef)sb ofType:(SCStreamOutputType)type {
-    if (type != SCStreamOutputTypeScreen || !CMSampleBufferIsValid(sb)) return;
+    if (!CMSampleBufferIsValid(sb)) return;
+    if (@available(macOS 13.0, *)) {
+        if (type == SCStreamOutputTypeAudio) {
+            uintptr_t h = self.handle;
+            if (h) screenAudio(h, sb);
+            return;
+        }
+    }
+    if (type != SCStreamOutputTypeScreen) return;
     CFArrayRef atts = CMSampleBufferGetSampleAttachmentsArray(sb, false);
     if (atts == NULL || CFArrayGetCount(atts) == 0) return;
     NSDictionary *info = (__bridge NSDictionary *)CFArrayGetValueAtIndex(atts, 0);
@@ -124,10 +183,11 @@ struct qv_screen {
     void *stream; // SCStream (retained)
     void *output; // QVScreenOutput (retained)
     void *queue;  // its sample handler queue (retained)
+    void *aqueue; // the sound's handler queue (retained; NULL without sound)
 };
 
 static qv_screen *screenStart(uint32_t display_id, uint32_t window_id, int width, int height, int max_width, int fps, int show_cursor,
-                           uintptr_t handle, char **err) API_AVAILABLE(macos(12.3)) {
+                           int audio, uintptr_t handle, char **err) API_AVAILABLE(macos(12.3)) {
     NSError *e = nil;
     SCShareableContent *c = shareableContent(&e);
     if (c == nil) {
@@ -183,6 +243,18 @@ static qv_screen *screenStart(uint32_t display_id, uint32_t window_id, int width
     cfg.showsCursor = show_cursor ? YES : NO;
     cfg.queueDepth = 5;
     cfg.scalesToFit = YES;
+    if (audio) {
+        if (@available(macOS 13.0, *)) {
+            // The display's apps (but this one: the call's own voices are
+            // never sent back), or the window's app.
+            cfg.capturesAudio = YES;
+            cfg.excludesCurrentProcessAudio = YES;
+            cfg.sampleRate = 48000;
+            cfg.channelCount = 2;
+        } else {
+            audio = 0;
+        }
+    }
 
     QVScreenOutput *out = [[QVScreenOutput alloc] init];
     out.handle = handle;
@@ -191,6 +263,16 @@ static qv_screen *screenStart(uint32_t display_id, uint32_t window_id, int width
     if (![stream addStreamOutput:out type:SCStreamOutputTypeScreen sampleHandlerQueue:q error:&e]) {
         *err = nserr(@"addStreamOutput failed", e);
         return NULL;
+    }
+    dispatch_queue_t aq = nil;
+    if (audio) {
+        if (@available(macOS 13.0, *)) {
+            aq = dispatch_queue_create("quicvideo.screen.audio", DISPATCH_QUEUE_SERIAL);
+            if (![stream addStreamOutput:out type:SCStreamOutputTypeAudio sampleHandlerQueue:aq error:&e]) {
+                *err = nserr(@"addStreamOutput (sound) failed", e);
+                return NULL;
+            }
+        }
     }
     __block NSError *startErr = nil;
     dispatch_semaphore_t sem = dispatch_semaphore_create(0);
@@ -207,12 +289,13 @@ static qv_screen *screenStart(uint32_t display_id, uint32_t window_id, int width
     s->stream = (__bridge_retained void *)stream;
     s->output = (__bridge_retained void *)out;
     s->queue = (__bridge_retained void *)q;
+    s->aqueue = aq ? (__bridge_retained void *)aq : NULL;
     return s;
 }
 
 qv_screen *qv_screen_start(uint32_t display_id, uint32_t window_id, int width, int height, int max_width, int fps, int show_cursor,
-                           uintptr_t handle, char **err) {
-    if (@available(macOS 12.3, *)) return screenStart(display_id, window_id, width, height, max_width, fps, show_cursor, handle, err);
+                           int audio, uintptr_t handle, char **err) {
+    if (@available(macOS 12.3, *)) return screenStart(display_id, window_id, width, height, max_width, fps, show_cursor, audio, handle, err);
     *err = strdup("screen sharing needs macOS 12.3 or later");
     return NULL;
 }
@@ -232,6 +315,11 @@ static void screenStop(qv_screen *s) API_AVAILABLE(macos(12.3)) {
     // deleted its handle: wait for the queue to drain.
     dispatch_queue_t q = (__bridge_transfer dispatch_queue_t)s->queue;
     dispatch_sync(q, ^{});
+    if (s->aqueue) {
+        if (@available(macOS 13.0, *)) [stream removeStreamOutput:out type:SCStreamOutputTypeAudio error:nil];
+        dispatch_queue_t aq = (__bridge_transfer dispatch_queue_t)s->aqueue;
+        dispatch_sync(aq, ^{});
+    }
     out.handle = 0;
     free(s);
 }
