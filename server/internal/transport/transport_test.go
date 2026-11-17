@@ -399,3 +399,105 @@ func (a *expAuth) Verify(_ context.Context, tok string) (*auth.Identity, error) 
 	}
 	return &auth.Identity{UserID: user, DisplayName: user, Role: auth.RoleSpeaker, ExpiresAt: exp}, nil
 }
+
+// A screen share's sound end to end: announced in Welcome, relayed in
+// order to clients that asked for it (Hello capability), and invisible to
+// older clients, which would take it for a video track.
+func TestScreenAudioEndToEnd(t *testing.T) {
+	addr := startServer(t, auth.NewInsecureAuthService())
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	alice := dialCaps(t, addr, "alice", nil, client.CapScreenAudio)
+	if !alice.ServerCan(client.CapScreenAudio) {
+		t.Fatal("the server didn't announce screen-audio")
+	}
+	_, err := alice.Join(ctx, "call")
+	must(t, err)
+	screen, err := alice.Publish(ctx, controlpb.TrackKind_SCREEN, "h264", []*controlpb.Layer{{Id: 0, Width: 1280, Height: 720, Fps: 30, Bitrate: 1_000_000}})
+	must(t, err)
+	sound, err := alice.Publish(ctx, controlpb.TrackKind_SCREEN_AUDIO, "opus", []*controlpb.Layer{{Id: 0, Bitrate: 64_000}},
+		client.PublishOptions{ForTrack: screen.ID()})
+	must(t, err)
+
+	rx := newRecv()
+	bob := dialCaps(t, addr, "bob", rx.on, client.CapScreenAudio)
+	state, err := bob.Join(ctx, "call")
+	must(t, err)
+	old := dial(t, addr, "carol", nil) // no capability: an older client
+	oldState, err := old.Join(ctx, "call")
+	must(t, err)
+	kinds := func(s *controlpb.RoomState) (n int, forID uint32) {
+		for _, tr := range s.GetTracks() {
+			if tr.GetKind() == controlpb.TrackKind_SCREEN_AUDIO {
+				n++
+				forID = tr.GetForTrackId()
+			}
+		}
+		return
+	}
+	if n, forID := kinds(state); n != 1 || forID != screen.ID() {
+		t.Fatalf("bob: %d sound tracks for %d", n, forID)
+	}
+	if n, _ := kinds(oldState); n != 0 || len(oldState.GetTracks()) != 1 {
+		t.Fatalf("an older client was shown %d sound tracks (%d tracks)", n, len(oldState.GetTracks()))
+	}
+
+	must(t, bob.Subscribe(sound.ID(), 0, 0))
+	waitActive(t, sound, 0, true)
+	base := uint64(time.Now().UnixMicro())
+	// Paced like real sound (20 ms frames): a burst would have the relay
+	// drop superseded groups, its latency guard.
+	for i := 0; i < 25; i++ {
+		must(t, sound.WriteFrame(0, i%10 == 0, base+uint64(i)*20_000, payload(byte(i), 80)))
+		time.Sleep(20 * time.Millisecond)
+	}
+	for i := 0; i < 25; i++ {
+		f := rx.next(t)
+		if f.TrackID != sound.ID() || f.CaptureUS != base+uint64(i)*20_000 || f.Payload[0] != byte(i) || f.GroupStart != (i%10 == 0) {
+			t.Fatalf("frame %d: track %d, capture %d, %d, group start %v", i, f.TrackID, f.CaptureUS-base, f.Payload[0], f.GroupStart)
+		}
+	}
+
+	// A later sound isn't announced to the older client either, and the
+	// sound goes when the share does.
+	must(t, sound.Unpublish())
+	sound2, err := alice.Publish(ctx, controlpb.TrackKind_SCREEN_AUDIO, "opus", []*controlpb.Layer{{Id: 0, Bitrate: 64_000}},
+		client.PublishOptions{ForTrack: screen.ID()})
+	must(t, err)
+	waitEvent(t, bob, func(m *controlpb.ControlMessage) bool {
+		return m.GetTrackAdded().GetTrack().GetTrackId() == sound2.ID()
+	})
+	must(t, screen.Unpublish())
+	waitEvent(t, bob, func(m *controlpb.ControlMessage) bool { return m.GetTrackRemoved().GetTrackId() == sound2.ID() })
+	waitEvent(t, old, func(m *controlpb.ControlMessage) bool { return m.GetTrackRemoved().GetTrackId() == screen.ID() })
+	select {
+	case m := <-old.Events():
+		for ; m != nil; m = nextOrNil(old) {
+			if m.GetTrackAdded().GetTrack().GetKind() == controlpb.TrackKind_SCREEN_AUDIO {
+				t.Fatal("an older client was told about a sound track")
+			}
+		}
+	default:
+	}
+}
+
+func nextOrNil(c *client.Client) *controlpb.ControlMessage {
+	select {
+	case m := <-c.Events():
+		return m
+	default:
+		return nil
+	}
+}
+
+func dialCaps(t *testing.T, addr, token string, onFrame func(client.RemoteFrame), caps ...string) *client.Client {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	c, err := client.Dial(ctx, addr, client.Options{Token: token, TLS: &tls.Config{InsecureSkipVerify: true}, OnFrame: onFrame, Capabilities: caps})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = c.Close() })
+	return c
+}

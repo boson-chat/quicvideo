@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -54,6 +55,9 @@ type RemoteFrame struct {
 type Options struct {
 	Token         string
 	ClientVersion string
+	// Capabilities go in Hello: CapScreenAudio asks to hear about screen
+	// shares' sound tracks (servers hide them from clients that don't).
+	Capabilities []string
 	// TLS config; nil = system roots. ServerName defaults to the host.
 	TLS *tls.Config
 	// OnFrame is called for each received frame, from one goroutine per
@@ -151,7 +155,7 @@ func Dial(ctx context.Context, addr string, opts Options) (*Client, error) {
 		refreshKick: make(chan struct{}, 1),
 	}
 	if err := c.send(&controlpb.ControlMessage{Msg: &controlpb.ControlMessage_Hello{Hello: &controlpb.Hello{
-		Token: opts.Token, ClientVersion: opts.ClientVersion}}}); err != nil {
+		Token: opts.Token, ClientVersion: opts.ClientVersion, Capabilities: opts.Capabilities}}}); err != nil {
 		_ = conn.CloseWithError(0, "")
 		return nil, err
 	}
@@ -191,7 +195,17 @@ func Dial(ctx context.Context, addr string, opts Options) (*Client, error) {
 }
 
 func (c *Client) Welcome() *controlpb.Welcome { return c.welcome }
-func (c *Client) SessionID() uint32           { return c.welcome.GetSessionId() }
+
+// CapScreenAudio: screen share sound (docs/screen-audio.md). As a Hello
+// capability the client handles SCREEN_AUDIO tracks; in Welcome the
+// server relays them.
+const CapScreenAudio = "screen-audio"
+
+// ServerCan reports whether the server announced a capability in Welcome.
+func (c *Client) ServerCan(capability string) bool {
+	return slices.Contains(c.welcome.GetCapabilities(), capability)
+}
+func (c *Client) SessionID() uint32 { return c.welcome.GetSessionId() }
 
 // Events delivers room events: ParticipantJoined/Left, TrackAdded/Removed,
 // and errors not tied to a request. Closed when the connection ends.
@@ -302,7 +316,7 @@ func (c *Client) Publish(ctx context.Context, kind controlpb.TrackKind, codec st
 		c.mu.Unlock()
 	}()
 	if err := c.send(&controlpb.ControlMessage{Msg: &controlpb.ControlMessage_Publish{Publish: &controlpb.Publish{
-		ClientRef: ref, Kind: kind, Codec: codec, Layers: layers}}}); err != nil {
+		ClientRef: ref, Kind: kind, Codec: codec, Layers: layers, ForTrackId: popts.ForTrack}}}); err != nil {
 		return nil, err
 	}
 	var m *controlpb.ControlMessage

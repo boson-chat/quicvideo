@@ -113,6 +113,12 @@ type ScreenOptions struct {
 	// fps) or ScreenDetail (text and detail: sharper, up to 1440p, 15 fps).
 	Mode   ScreenMode
 	Cursor bool // draw the cursor
+	// Audio, when set, also captures the share's sound where the platform
+	// can (ScreenAudioSupported): a display's apps but this one, or a
+	// window's app. It's called with mono 48 kHz samples in -1..1 and the
+	// first sample's capture time (wall clock µs, the frames' clock), on a
+	// capture thread: hand them off quickly. See docs/screen-audio.md.
+	Audio func(pcm []float32, captureUS int64)
 }
 
 // CameraOptions select a camera and format (zero values: default camera,

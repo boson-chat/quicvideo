@@ -88,6 +88,8 @@ function relabel(t: Tile): void {
 
 function addTrack(track: Track): void {
   if (tiles.has(track.trackId)) return;
+  // A screen share's sound (Opus): the browser demo shows video only.
+  if (track.kind !== TrackKind.CAMERA && track.kind !== TrackKind.SCREEN) return;
   const el = document.createElement("div");
   el.className = "tile";
   const canvas = document.createElement("canvas");

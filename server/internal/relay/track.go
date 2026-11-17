@@ -14,16 +14,18 @@ import (
 
 // Track is one published video track (camera or screen) with its layers.
 type Track struct {
-	r      *Relay
-	owner  *Member
-	id     uint32
-	kind   controlpb.TrackKind
-	codec  string
-	layerP []*controlpb.Layer
-	byRate []*controlpb.Layer // layerP sorted by bitrate, lowest first
-	layers map[uint32]*layerState
-	subs   map[*Subscription]struct{} // guarded by Relay.mu
-	closed atomic.Bool
+	r     *Relay
+	owner *Member
+	id    uint32
+	kind  controlpb.TrackKind
+	codec string
+	// forTrack: a SCREEN_AUDIO track's screen share (0 otherwise).
+	forTrack uint32
+	layerP   []*controlpb.Layer
+	byRate   []*controlpb.Layer // layerP sorted by bitrate, lowest first
+	layers   map[uint32]*layerState
+	subs     map[*Subscription]struct{} // guarded by Relay.mu
+	closed   atomic.Bool
 
 	// Ingress delay baseline over all layers (arrival − capture; the
 	// publisher's clock offset cancels): minimum over two rolling windows.
@@ -58,7 +60,11 @@ func newTrack(r *Relay, owner *Member, id uint32, kind controlpb.TrackKind, code
 
 func (t *Track) ID() uint32 { return t.id }
 
-func (t *Track) screen() bool { return t.kind == controlpb.TrackKind_SCREEN }
+// screen: a screen share or its sound. Both go at screen priority and
+// are always allocated (the sound is part of the share).
+func (t *Track) screen() bool {
+	return t.kind == controlpb.TrackKind_SCREEN || t.kind == controlpb.TrackKind_SCREEN_AUDIO
+}
 
 func (t *Track) defaultUrgency() int8 {
 	if t.screen() {
@@ -68,7 +74,7 @@ func (t *Track) defaultUrgency() int8 {
 }
 
 func (t *Track) proto() *controlpb.Track {
-	return &controlpb.Track{TrackId: t.id, SessionId: t.owner.peer.ID(), Kind: t.kind, Codec: t.codec, Layers: t.layerP}
+	return &controlpb.Track{TrackId: t.id, SessionId: t.owner.peer.ID(), Kind: t.kind, Codec: t.codec, Layers: t.layerP, ForTrackId: t.forTrack}
 }
 
 // close marks the track gone; in-flight ingests fail with ErrGone.

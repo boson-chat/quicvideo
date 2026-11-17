@@ -26,7 +26,8 @@ Tokens are JWTs: EdDSA tokens from the boson auth service (JWKS, audience `quicv
 
 ## Publishing
 
-- `Publish{client_ref, kind (CAMERA|SCREEN), codec, layers[]}` → `PublishOK{client_ref, track_id}` or `Error{client_ref}`. Each layer has an `id` (0 is the lowest by convention), resolution, fps and a target bitrate.
+- `Publish{client_ref, kind (CAMERA|SCREEN|SCREEN_AUDIO), codec, layers[], for_track_id}` → `PublishOK{client_ref, track_id}` or `Error{client_ref}`. Each layer has an `id` (0 is the lowest by convention), resolution, fps and a target bitrate.
+- `kind SCREEN_AUDIO` is a screen share's sound (docs/screen-audio.md): `for_track_id` names one of the publisher's own `SCREEN` tracks (one sound per share), exactly one layer, codec `opus`; every Opus packet decodes on its own, and the first of each group (about 200 ms) is flagged keyframe. It's only announced (`RoomState`, `TrackAdded`) to clients whose `Hello.capabilities` include `screen-audio`; servers that relay it list `screen-audio` in `Welcome.capabilities`. It's announced with its `for_track_id`, goes at screen priority (default urgency 1, always allocated) and is removed with its share.
 - The rest of the room gets `TrackAdded{track}`.
 - `Unpublish{track_id}` → `TrackRemoved` to the room.
 - `PublishOK` is always sent before the rest of the room hears `TrackAdded`, so `LayerActive` / `KeyframeRequest` for the new track never arrive first.

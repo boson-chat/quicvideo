@@ -30,6 +30,8 @@ type PublishOptions struct {
 	// asked, the layer just became active, or the send queue dropped frames.
 	// The same layer ids also arrive on KeyframeRequests().
 	OnKeyframeNeeded func(layer uint32)
+	// ForTrack: a SCREEN_AUDIO track's screen share (one of ours).
+	ForTrack uint32
 }
 
 // LayerStats is a snapshot of one layer's send side.
@@ -89,7 +91,7 @@ func newLocalTrack(c *Client, id uint32, kind controlpb.TrackKind, layers []*con
 		o.MaxQueueBytes = 2 << 20
 	}
 	urgency := int8(4)
-	if kind == controlpb.TrackKind_SCREEN {
+	if kind == controlpb.TrackKind_SCREEN || kind == controlpb.TrackKind_SCREEN_AUDIO {
 		urgency = 1
 	}
 	t := &LocalTrack{c: c, id: id, urgency: urgency, opts: o, layers: map[uint32]*localLayer{},

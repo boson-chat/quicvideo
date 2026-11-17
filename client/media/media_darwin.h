@@ -50,8 +50,12 @@ typedef struct qv_screen qv_screen;
 // display_id != 0 captures a display; else window_id. width/height 0 = native.
 unsigned char *qv_app_icon(const char *bundle_id, int size, size_t *len);
 unsigned char *qv_screen_thumbnail(uint32_t display_id, uint32_t window_id, int max_w, size_t *len, char **err);
+// audio = 1 also captures the share's sound (macOS 13+; this app's own
+// sound left out), as qvGoScreenAudio calls: mono float samples.
 qv_screen *qv_screen_start(uint32_t display_id, uint32_t window_id, int width, int height, int max_width, int fps,
-                           int show_cursor, uintptr_t handle, char **err);
+                           int show_cursor, int audio, uintptr_t handle, char **err);
+// 1 if a screen share can carry its sound (macOS 13+).
+int qv_screen_audio_supported(void);
 void qv_screen_stop(qv_screen *s);
 // 1 if ScreenCaptureKit is there (macOS 12.3+; it's weak-linked).
 int qv_screen_supported(void);

@@ -101,6 +101,7 @@ func ListScreens() ([]Display, []Window, error) {
 type nativeSource struct {
 	w, h, fps int
 	push      func(CapturedFrame)
+	audio     *audioResampler // the share's sound, when asked for
 	handle    cgo.Handle
 	stopFn    func()
 	once      sync.Once
@@ -192,10 +193,13 @@ func StartScreen(o ScreenOptions, push func(CapturedFrame)) (Source, error) {
 		}
 	}
 	s := &nativeSource{fps: o.FPS, push: push, w: w, h: h, ended: newEnded()}
+	if o.Audio != nil && ScreenAudioSupported() {
+		s.audio = &audioResampler{out: o.Audio}
+	}
 	s.handle = cgo.NewHandle(s)
 	var errp *C.char
 	sc := C.qv_screen_start(C.uint32_t(o.DisplayID), C.uint32_t(o.WindowID), C.int(w), C.int(h), C.int(o.MaxWidth), C.int(o.FPS),
-		cbool(o.Cursor), C.uintptr_t(s.handle), &errp)
+		cbool(o.Cursor), cbool(s.audio != nil), C.uintptr_t(s.handle), &errp)
 	if sc == nil {
 		s.handle.Delete()
 		return nil, cerr(errp)
@@ -221,6 +225,20 @@ func qvGoScreenFrame(handle C.uintptr_t, pb unsafe.Pointer, us C.int64_t) {
 	if s := sourceFor(handle); s != nil {
 		s.frame(pb, int64(us))
 	}
+}
+
+// ScreenAudioSupported reports whether a screen share can carry its sound
+// here (macOS 13+).
+func ScreenAudioSupported() bool { return C.qv_screen_audio_supported() != 0 }
+
+//export qvGoScreenAudio
+func qvGoScreenAudio(handle C.uintptr_t, pcm *C.float, n C.int, rate C.int, us C.int64_t) {
+	s := sourceFor(handle)
+	if s == nil || s.audio == nil || n <= 0 {
+		return
+	}
+	in := unsafe.Slice((*float32)(unsafe.Pointer(pcm)), int(n))
+	s.audio.push(in, int(rate), int64(us))
 }
 
 //export qvGoScreenStopped

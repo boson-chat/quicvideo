@@ -98,6 +98,9 @@ enum TrackKind {
   TRACK_KIND_UNSPECIFIED = 0;
   CAMERA = 1;
   SCREEN = 2;
+  // The sound of a screen share (docs/screen-audio.md): one Opus layer,
+  // tied to its SCREEN track by for_track_id.
+  SCREEN_AUDIO = 3;
 }
 
 // One simulcast encoding of a track. id is the layer number used in media
@@ -116,6 +119,7 @@ message Track {
   TrackKind kind = 3;
   string codec = 4;          // "h264"
   repeated Layer layers = 5;
+  uint32 for_track_id = 6;   // SCREEN_AUDIO: the owner's SCREEN track
 }
 
 message RoomState {
@@ -133,6 +137,7 @@ message Publish {
   TrackKind kind = 2;
   string codec = 3;
   repeated Layer layers = 4;
+  uint32 for_track_id = 5;   // SCREEN_AUDIO: the publisher's own SCREEN track
 }
 
 message PublishOK {

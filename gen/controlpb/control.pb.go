@@ -32,6 +32,9 @@ const (
 	TrackKind_TRACK_KIND_UNSPECIFIED TrackKind = 0
 	TrackKind_CAMERA                 TrackKind = 1
 	TrackKind_SCREEN                 TrackKind = 2
+	// The sound of a screen share (docs/screen-audio.md): one Opus layer,
+	// tied to its SCREEN track by for_track_id.
+	TrackKind_SCREEN_AUDIO TrackKind = 3
 )
 
 // Enum value maps for TrackKind.
@@ -40,11 +43,13 @@ var (
 		0: "TRACK_KIND_UNSPECIFIED",
 		1: "CAMERA",
 		2: "SCREEN",
+		3: "SCREEN_AUDIO",
 	}
 	TrackKind_value = map[string]int32{
 		"TRACK_KIND_UNSPECIFIED": 0,
 		"CAMERA":                 1,
 		"SCREEN":                 2,
+		"SCREEN_AUDIO":           3,
 	}
 )
 
@@ -1019,6 +1024,7 @@ type Track struct {
 	Kind          TrackKind              `protobuf:"varint,3,opt,name=kind,proto3,enum=quicvideo.v1.TrackKind" json:"kind,omitempty"`
 	Codec         string                 `protobuf:"bytes,4,opt,name=codec,proto3" json:"codec,omitempty"` // "h264"
 	Layers        []*Layer               `protobuf:"bytes,5,rep,name=layers,proto3" json:"layers,omitempty"`
+	ForTrackId    uint32                 `protobuf:"varint,6,opt,name=for_track_id,json=forTrackId,proto3" json:"for_track_id,omitempty"` // SCREEN_AUDIO: the owner's SCREEN track
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1086,6 +1092,13 @@ func (x *Track) GetLayers() []*Layer {
 		return x.Layers
 	}
 	return nil
+}
+
+func (x *Track) GetForTrackId() uint32 {
+	if x != nil {
+		return x.ForTrackId
+	}
+	return 0
 }
 
 type RoomState struct {
@@ -1258,6 +1271,7 @@ type Publish struct {
 	Kind          TrackKind              `protobuf:"varint,2,opt,name=kind,proto3,enum=quicvideo.v1.TrackKind" json:"kind,omitempty"`
 	Codec         string                 `protobuf:"bytes,3,opt,name=codec,proto3" json:"codec,omitempty"`
 	Layers        []*Layer               `protobuf:"bytes,4,rep,name=layers,proto3" json:"layers,omitempty"`
+	ForTrackId    uint32                 `protobuf:"varint,5,opt,name=for_track_id,json=forTrackId,proto3" json:"for_track_id,omitempty"` // SCREEN_AUDIO: the publisher's own SCREEN track
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1318,6 +1332,13 @@ func (x *Publish) GetLayers() []*Layer {
 		return x.Layers
 	}
 	return nil
+}
+
+func (x *Publish) GetForTrackId() uint32 {
+	if x != nil {
+		return x.ForTrackId
+	}
+	return 0
 }
 
 type PublishOK struct {
@@ -2199,14 +2220,16 @@ const file_quicvideo_v1_control_proto_rawDesc = "" +
 	"\x05width\x18\x02 \x01(\rR\x05width\x12\x16\n" +
 	"\x06height\x18\x03 \x01(\rR\x06height\x12\x10\n" +
 	"\x03fps\x18\x04 \x01(\rR\x03fps\x12\x18\n" +
-	"\abitrate\x18\x05 \x01(\x04R\abitrate\"\xb1\x01\n" +
+	"\abitrate\x18\x05 \x01(\x04R\abitrate\"\xd3\x01\n" +
 	"\x05Track\x12\x19\n" +
 	"\btrack_id\x18\x01 \x01(\rR\atrackId\x12\x1d\n" +
 	"\n" +
 	"session_id\x18\x02 \x01(\rR\tsessionId\x12+\n" +
 	"\x04kind\x18\x03 \x01(\x0e2\x17.quicvideo.v1.TrackKindR\x04kind\x12\x14\n" +
 	"\x05codec\x18\x04 \x01(\tR\x05codec\x12+\n" +
-	"\x06layers\x18\x05 \x03(\v2\x13.quicvideo.v1.LayerR\x06layers\"\xb3\x01\n" +
+	"\x06layers\x18\x05 \x03(\v2\x13.quicvideo.v1.LayerR\x06layers\x12 \n" +
+	"\ffor_track_id\x18\x06 \x01(\rR\n" +
+	"forTrackId\"\xb3\x01\n" +
 	"\tRoomState\x12\x12\n" +
 	"\x04room\x18\x01 \x01(\tR\x04room\x12&\n" +
 	"\x0fyour_session_id\x18\x02 \x01(\rR\ryourSessionId\x12=\n" +
@@ -2217,13 +2240,15 @@ const file_quicvideo_v1_control_proto_rawDesc = "" +
 	"\x0fParticipantLeft\x12\x1d\n" +
 	"\n" +
 	"session_id\x18\x01 \x01(\rR\tsessionId\x12\x16\n" +
-	"\x06reason\x18\x02 \x01(\tR\x06reason\"\x98\x01\n" +
+	"\x06reason\x18\x02 \x01(\tR\x06reason\"\xba\x01\n" +
 	"\aPublish\x12\x1d\n" +
 	"\n" +
 	"client_ref\x18\x01 \x01(\tR\tclientRef\x12+\n" +
 	"\x04kind\x18\x02 \x01(\x0e2\x17.quicvideo.v1.TrackKindR\x04kind\x12\x14\n" +
 	"\x05codec\x18\x03 \x01(\tR\x05codec\x12+\n" +
-	"\x06layers\x18\x04 \x03(\v2\x13.quicvideo.v1.LayerR\x06layers\"E\n" +
+	"\x06layers\x18\x04 \x03(\v2\x13.quicvideo.v1.LayerR\x06layers\x12 \n" +
+	"\ffor_track_id\x18\x05 \x01(\rR\n" +
+	"forTrackId\"E\n" +
 	"\tPublishOK\x12\x1d\n" +
 	"\n" +
 	"client_ref\x18\x01 \x01(\tR\tclientRef\x12\x19\n" +
@@ -2278,13 +2303,14 @@ const file_quicvideo_v1_control_proto_rawDesc = "" +
 	"\x04Ping\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\x04R\x02id\"\x16\n" +
 	"\x04Pong\x12\x0e\n" +
-	"\x02id\x18\x01 \x01(\x04R\x02id*?\n" +
+	"\x02id\x18\x01 \x01(\x04R\x02id*Q\n" +
 	"\tTrackKind\x12\x1a\n" +
 	"\x16TRACK_KIND_UNSPECIFIED\x10\x00\x12\n" +
 	"\n" +
 	"\x06CAMERA\x10\x01\x12\n" +
 	"\n" +
-	"\x06SCREEN\x10\x02B/Z-github.com/boson-chat/quicvideo/gen/controlpbb\x06proto3"
+	"\x06SCREEN\x10\x02\x12\x10\n" +
+	"\fSCREEN_AUDIO\x10\x03B/Z-github.com/boson-chat/quicvideo/gen/controlpbb\x06proto3"
 
 var (
 	file_quicvideo_v1_control_proto_rawDescOnce sync.Once
