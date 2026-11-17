@@ -188,12 +188,7 @@ func ListScreens() ([]Display, []Window, error) {
 // xdg-desktop-portal ScreenCast picker (the choice is remembered with a
 // restore token, so later shares don't ask again); on X11 it uses x11grab.
 func StartScreen(o ScreenOptions, push func(CapturedFrame)) (Source, error) {
-	if o.FPS <= 0 {
-		o.FPS = ScreenFPS
-	}
-	if o.MaxWidth <= 0 {
-		o.MaxWidth = 1920
-	}
+	o.screenDefaults()
 	if os.Getenv("WAYLAND_DISPLAY") == "" && os.Getenv("DISPLAY") != "" {
 		return startAV("x11grab", os.Getenv("DISPLAY"), 0, 0, o.FPS, push)
 	}

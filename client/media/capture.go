@@ -10,12 +10,16 @@ type Display struct {
 	ID            uint32
 	Width, Height int
 	Main          bool
+	// HasSelf: one of this app's windows is on it. Sharing it shows the
+	// call inside the share (the windows themselves are left out).
+	HasSelf bool
 }
 
 // Window is an on-screen window that can be captured.
 type Window struct {
 	ID            uint32
 	Title, App    string
+	BundleID      string // the app's (macOS), for its icon
 	Width, Height int
 }
 
@@ -104,8 +108,11 @@ type ScreenOptions struct {
 	// MaxWidth caps the capture width (default 1920, the top screen layer):
 	// capturing a 3024-wide Retina panel only to scale it down wastes GPU.
 	MaxWidth int
-	FPS      int  // capture rate cap (default ScreenFPS, the top screen layer's)
-	Cursor   bool // draw the cursor
+	FPS      int // capture rate cap (default ScreenFPS, the top screen layer's)
+	// Mode is what the share is for: ScreenMotion (default: smooth, 30
+	// fps) or ScreenDetail (text and detail: sharper, up to 1440p, 15 fps).
+	Mode   ScreenMode
+	Cursor bool // draw the cursor
 }
 
 // CameraOptions select a camera and format (zero values: default camera,
@@ -164,3 +171,30 @@ const (
 		"(the app itself, or your terminal when started from one). Bundled apps need NSCameraUsageDescription " +
 		"in their Info.plist."
 )
+
+// ScreenMode: what a screen share is optimized for.
+type ScreenMode string
+
+const (
+	ScreenMotion ScreenMode = "motion" // video and scrolling: 1080p, 30 fps
+	ScreenDetail ScreenMode = "detail" // text and detail: up to 1440p, 15 fps
+)
+
+// ScreenCapture is the capture size cap and rate for a mode.
+func ScreenCapture(mode ScreenMode) (maxWidth, fps int) {
+	if mode == ScreenDetail {
+		return 2560, 15
+	}
+	return 1920, ScreenFPS
+}
+
+// screenDefaults fills a zero capture rate and size cap from the mode.
+func (o *ScreenOptions) screenDefaults() {
+	maxW, fps := ScreenCapture(o.Mode)
+	if o.FPS <= 0 {
+		o.FPS = fps
+	}
+	if o.MaxWidth <= 0 {
+		o.MaxWidth = maxW
+	}
+}

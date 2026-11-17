@@ -10,6 +10,7 @@ import "C"
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"runtime/cgo"
 	"sync"
@@ -74,10 +75,12 @@ func ListScreens() ([]Display, []Window, error) {
 			ID            uint32
 			Width, Height int
 			Main          bool
+			HasSelf       bool `json:"has_self"`
 		}
 		Windows []struct {
 			ID            uint32
 			Title, App    string
+			BundleID      string `json:"bundle_id"`
 			Width, Height int
 		}
 	}
@@ -130,6 +133,38 @@ func (s *nativeSource) frame(pb unsafe.Pointer, us int64) {
 	s.push(CapturedFrame{Picture: p, CaptureUS: uint64(us)})
 }
 
+// AppIcon is an app's icon (macOS bundle id) as a size×size PNG.
+func AppIcon(bundleID string, size int) ([]byte, error) {
+	if bundleID == "" {
+		return nil, ErrUnsupported
+	}
+	cs := C.CString(bundleID)
+	defer C.free(unsafe.Pointer(cs))
+	var n C.size_t
+	p := C.qv_app_icon(cs, C.int(size), &n)
+	if p == nil {
+		return nil, errors.New("media: no icon for " + bundleID)
+	}
+	defer C.free(unsafe.Pointer(p))
+	return C.GoBytes(unsafe.Pointer(p), C.int(n)), nil
+}
+
+// ScreenThumbnail is one small JPEG (at most maxW wide) of a display (this
+// app's windows left out) or a window, for a picker. macOS 14+.
+func ScreenThumbnail(displayID, windowID uint32, maxW int) ([]byte, error) {
+	if C.qv_screen_supported() == 0 {
+		return nil, ErrScreenUnsupported
+	}
+	var n C.size_t
+	var errp *C.char
+	p := C.qv_screen_thumbnail(C.uint32_t(displayID), C.uint32_t(windowID), C.int(maxW), &n, &errp)
+	if p == nil {
+		return nil, cerr(errp)
+	}
+	defer C.free(unsafe.Pointer(p))
+	return C.GoBytes(unsafe.Pointer(p), C.int(n)), nil
+}
+
 // StartScreen captures a display or window (ScreenCaptureKit). Frames only
 // arrive when something on screen changed.
 func StartScreen(o ScreenOptions, push func(CapturedFrame)) (Source, error) {
@@ -140,12 +175,7 @@ func StartScreen(o ScreenOptions, push func(CapturedFrame)) (Source, error) {
 		RequestScreenPermission()
 		return nil, screenPermissionError()
 	}
-	if o.FPS <= 0 {
-		o.FPS = ScreenFPS
-	}
-	if o.MaxWidth <= 0 {
-		o.MaxWidth = 1920
-	}
+	o.screenDefaults()
 	if o.DisplayID == PortalPicker {
 		o.DisplayID = 0 // no system picker here: the main display
 	}

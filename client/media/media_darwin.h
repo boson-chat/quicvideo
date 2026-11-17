@@ -48,6 +48,8 @@ int qv_camera_request(int timeout_ms);
 char *qv_screen_list(char **err);
 typedef struct qv_screen qv_screen;
 // display_id != 0 captures a display; else window_id. width/height 0 = native.
+unsigned char *qv_app_icon(const char *bundle_id, int size, size_t *len);
+unsigned char *qv_screen_thumbnail(uint32_t display_id, uint32_t window_id, int max_w, size_t *len, char **err);
 qv_screen *qv_screen_start(uint32_t display_id, uint32_t window_id, int width, int height, int max_width, int fps,
                            int show_cursor, uintptr_t handle, char **err);
 void qv_screen_stop(qv_screen *s);

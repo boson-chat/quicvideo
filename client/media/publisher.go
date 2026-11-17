@@ -17,6 +17,7 @@ type EncoderConfig struct {
 	Bitrate       uint64        // bits/s
 	GOP           time.Duration // max keyframe interval
 	Screen        bool          // content hint: text-heavy, mostly static
+	Motion        bool          // a screen for video and scrolling: smoothness first
 }
 
 // EncodedFrame is one Annex-B access unit from an encoder.
@@ -49,6 +50,9 @@ type TrackWriter interface {
 type PublisherOptions struct {
 	GOP    time.Duration // default 2s camera, 4s screen
 	Screen bool
+	// Motion: a screen share optimized for smooth motion (ScreenMotion)
+	// rather than sharp detail.
+	Motion bool
 	// OnError gets encoder creation/encode errors (default: ignored).
 	OnError func(layer uint32, err error)
 	// Now is the clock (tests).
@@ -126,7 +130,7 @@ func PublishTrack(ctx context.Context, c *client.Client, kind controlpb.TrackKin
 
 func (p *Publisher) config(l *controlpb.Layer) EncoderConfig {
 	return EncoderConfig{Width: int(l.GetWidth()), Height: int(l.GetHeight()), FPS: int(l.GetFps()),
-		Bitrate: l.GetBitrate(), GOP: p.opts.GOP, Screen: p.opts.Screen}
+		Bitrate: l.GetBitrate(), GOP: p.opts.GOP, Screen: p.opts.Screen, Motion: p.opts.Screen && p.opts.Motion}
 }
 
 // SetActive starts or stops a layer's encoder (LayerActive).

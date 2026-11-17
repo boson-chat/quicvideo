@@ -48,20 +48,29 @@ static char *screenList(char **err) API_AVAILABLE(macos(12.3)) {
         *err = nserr(@"listing screens failed", e);
         return NULL;
     }
+    pid_t me = getpid();
     NSMutableArray *displays = [NSMutableArray array];
     for (SCDisplay *d in c.displays) {
         int w, h;
         displayPixels(d.displayID, &w, &h);
+        // One of our own windows is on it: sharing it shows the call
+        // inside the share (the windows themselves are left out).
+        BOOL hasSelf = NO;
+        for (SCWindow *win in c.windows) {
+            if (win.owningApplication.processID == me && win.windowLayer == 0 && CGRectIntersectsRect(win.frame, d.frame)) hasSelf = YES;
+        }
         [displays addObject:@{
             @"id" : @(d.displayID), @"width" : @(w), @"height" : @(h),
-            @"main" : (d.displayID == CGMainDisplayID() ? @YES : @NO)
+            @"main" : (d.displayID == CGMainDisplayID() ? @YES : @NO), @"has_self" : @(hasSelf)
         }];
     }
     NSMutableArray *windows = [NSMutableArray array];
     for (SCWindow *w in c.windows) {
         if (w.windowLayer != 0 || w.frame.size.width < 64 || w.frame.size.height < 64) continue; // normal windows
+        if (w.owningApplication.processID == me) continue;                                       // not our own
         [windows addObject:@{
             @"id" : @(w.windowID), @"title" : w.title ?: @"", @"app" : w.owningApplication.applicationName ?: @"",
+            @"bundle_id" : w.owningApplication.bundleIdentifier ?: @"",
             @"width" : @((int)w.frame.size.width), @"height" : @((int)w.frame.size.height)
         }];
     }
@@ -140,7 +149,13 @@ static qv_screen *screenStart(uint32_t display_id, uint32_t window_id, int width
         CGDirectDisplayID want = display_id ? display_id : CGMainDisplayID();
         for (SCDisplay *d in c.displays) {
             if (d.displayID == want) {
-                filter = [[SCContentFilter alloc] initWithDisplay:d excludingWindows:@[]];
+                // Our own windows are left out of the share (no call inside
+                // the call).
+                NSMutableArray *own = [NSMutableArray array];
+                for (SCRunningApplication *app in c.applications) {
+                    if (app.processID == getpid()) [own addObject:app];
+                }
+                filter = [[SCContentFilter alloc] initWithDisplay:d excludingApplications:own exceptingWindows:@[]];
                 displayPixels(d.displayID, &nw, &nh);
             }
         }
@@ -225,3 +240,97 @@ void qv_screen_stop(qv_screen *s) {
     if (@available(macOS 12.3, *)) screenStop(s); // only ever started on 12.3+
 }
 
+
+// ---------------------------------------------------------------- picker
+
+// qv_app_icon: an app's icon as PNG (size×size), for the picker's window
+// list. NULL if the app isn't found.
+unsigned char *qv_app_icon(const char *bundle_id, int size, size_t *len) {
+    @autoreleasepool {
+        NSString *bid = [NSString stringWithUTF8String:bundle_id];
+        NSURL *url = [[NSWorkspace sharedWorkspace] URLForApplicationWithBundleIdentifier:bid];
+        if (url == nil) return NULL;
+        NSImage *icon = [[NSWorkspace sharedWorkspace] iconForFile:url.path];
+        NSBitmapImageRep *rep = [[NSBitmapImageRep alloc] initWithBitmapDataPlanes:NULL pixelsWide:size pixelsHigh:size
+                                                                     bitsPerSample:8 samplesPerPixel:4 hasAlpha:YES isPlanar:NO
+                                                                    colorSpaceName:NSDeviceRGBColorSpace bytesPerRow:0 bitsPerPixel:0];
+        [NSGraphicsContext saveGraphicsState];
+        [NSGraphicsContext setCurrentContext:[NSGraphicsContext graphicsContextWithBitmapImageRep:rep]];
+        [icon drawInRect:NSMakeRect(0, 0, size, size) fromRect:NSZeroRect operation:NSCompositingOperationCopy fraction:1];
+        [NSGraphicsContext restoreGraphicsState];
+        NSData *png = [rep representationUsingType:NSBitmapImageFileTypePNG properties:@{}];
+        if (png.length == 0) return NULL;
+        unsigned char *out = malloc(png.length);
+        memcpy(out, png.bytes, png.length);
+        *len = png.length;
+        return out;
+    }
+}
+
+static unsigned char *thumbnail(uint32_t display_id, uint32_t window_id, int max_w, size_t *len, char **err) API_AVAILABLE(macos(14.0)) {
+    NSError *e = nil;
+    SCShareableContent *c = shareableContent(&e);
+    if (c == nil) {
+        *err = nserr(@"listing screens failed", e);
+        return NULL;
+    }
+    SCContentFilter *filter = nil;
+    CGFloat w = 0, h = 0;
+    if (window_id) {
+        for (SCWindow *win in c.windows) {
+            if (win.windowID == window_id) {
+                filter = [[SCContentFilter alloc] initWithDesktopIndependentWindow:win];
+                w = win.frame.size.width;
+                h = win.frame.size.height;
+            }
+        }
+    } else {
+        NSMutableArray *own = [NSMutableArray array];
+        for (SCRunningApplication *app in c.applications) {
+            if (app.processID == getpid()) [own addObject:app];
+        }
+        for (SCDisplay *d in c.displays) {
+            if (d.displayID == display_id) {
+                filter = [[SCContentFilter alloc] initWithDisplay:d excludingApplications:own exceptingWindows:@[]];
+                w = d.width;
+                h = d.height;
+            }
+        }
+    }
+    if (filter == nil || w <= 0 || h <= 0) {
+        *err = strdup("no such display or window");
+        return NULL;
+    }
+    SCStreamConfiguration *cfg = [[SCStreamConfiguration alloc] init];
+    CGFloat s = MIN(1.0, (CGFloat)max_w / w);
+    cfg.width = (size_t)MAX(2, w * s);
+    cfg.height = (size_t)MAX(2, h * s);
+    cfg.showsCursor = NO;
+    __block CGImageRef img = NULL;
+    __block NSError *ce = nil;
+    dispatch_semaphore_t sem = dispatch_semaphore_create(0);
+    [SCScreenshotManager captureImageWithFilter:filter configuration:cfg completionHandler:^(CGImageRef i, NSError *er) {
+      if (i) img = CGImageRetain(i);
+      ce = er;
+      dispatch_semaphore_signal(sem);
+    }];
+    if (dispatch_semaphore_wait(sem, dispatch_time(DISPATCH_TIME_NOW, 3 * NSEC_PER_SEC)) != 0 || img == NULL) {
+        *err = ce ? nserr(@"thumbnail failed", ce) : strdup("thumbnail timed out");
+        return NULL;
+    }
+    NSBitmapImageRep *rep = [[NSBitmapImageRep alloc] initWithCGImage:img];
+    CGImageRelease(img);
+    NSData *jpg = [rep representationUsingType:NSBitmapImageFileTypeJPEG properties:@{NSImageCompressionFactor : @0.7}];
+    unsigned char *out = malloc(jpg.length);
+    memcpy(out, jpg.bytes, jpg.length);
+    *len = jpg.length;
+    return out;
+}
+
+// qv_screen_thumbnail: one small JPEG of a display (our own windows left
+// out) or a window, at most max_w wide. macOS 14+ (SCScreenshotManager).
+unsigned char *qv_screen_thumbnail(uint32_t display_id, uint32_t window_id, int max_w, size_t *len, char **err) {
+    if (@available(macOS 14.0, *)) return thumbnail(display_id, window_id, max_w, len, err);
+    *err = strdup("thumbnails need macOS 14 or later");
+    return NULL;
+}
