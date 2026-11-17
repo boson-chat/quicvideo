@@ -109,3 +109,20 @@ func TestDefaultCamera(t *testing.T) {
 		t.Fatalf("only the closed built-in: got %+v", c)
 	}
 }
+
+func TestScreenLayersFor(t *testing.T) {
+	d := ScreenLayersFor(3024, 1964, ScreenDetail) // MacBook Pro Retina
+	if len(d) != 2 || d[0].GetFps() != 15 || d[1].GetFps() != 15 || d[1].GetHeight() > 1440 || d[1].GetWidth() <= 1920 {
+		t.Fatalf("detail %v", d)
+	}
+	m := ScreenLayersFor(3024, 1964, ScreenMotion)
+	if len(m) != 2 || m[1].GetFps() != ScreenFPS || m[1].GetWidth() != 1920 {
+		t.Fatalf("motion %v", m)
+	}
+	if w, fps := ScreenCapture(ScreenDetail); w != 2560 || fps != 15 {
+		t.Fatalf("detail capture %d@%d", w, fps)
+	}
+	if w, fps := ScreenCapture(""); w != 1920 || fps != ScreenFPS {
+		t.Fatalf("default capture %d@%d", w, fps)
+	}
+}

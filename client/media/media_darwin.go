@@ -132,7 +132,7 @@ func NewVTEncoder(cfg EncoderConfig, out func(EncodedFrame)) (Encoder, error) {
 	var errp *C.char
 	var hw C.int
 	enc := C.qv_enc_new(C.int(cfg.Width), C.int(cfg.Height), C.int(max(cfg.FPS, 1)), C.int(cfg.Bitrate), C.int(gop),
-		cbool(cfg.Screen), C.uintptr_t(e.handle), &errp, &hw)
+		C.int(screenHint(cfg)), C.uintptr_t(e.handle), &errp, &hw)
 	if enc == nil {
 		e.handle.Delete()
 		return nil, cerr(errp)
@@ -348,3 +348,15 @@ func (p *PixelBuffer) drawPattern(n int) {
 
 // SetDeviceOrientation is for Android; here the OS (or nothing) rotates frames.
 func SetDeviceOrientation(int) {}
+
+// screenHint is the encoder's content hint: 0 a camera, 1 a screen for
+// sharp detail, 2 a screen for smooth motion.
+func screenHint(cfg EncoderConfig) int {
+	switch {
+	case !cfg.Screen:
+		return 0
+	case cfg.Motion:
+		return 2
+	}
+	return 1
+}

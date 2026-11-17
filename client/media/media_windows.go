@@ -353,9 +353,7 @@ func StartScreen(o ScreenOptions, push func(CapturedFrame)) (Source, error) {
 	if C.qv_wgc_supported() == 0 {
 		return nil, fmt.Errorf("media: Windows.Graphics.Capture isn't supported here (Windows 10 1903 or later with a desktop session)")
 	}
-	if o.FPS <= 0 {
-		o.FPS = ScreenFPS
-	}
+	o.screenDefaults()
 	monitor := 0
 	if o.DisplayID != 0 && o.DisplayID != PortalPicker {
 		monitor = int(o.DisplayID) - 1

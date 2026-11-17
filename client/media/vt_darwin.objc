@@ -125,8 +125,9 @@ qv_enc *qv_enc_new(int width, int height, int fps, int bitrate, int gop_frames, 
     setProp(s, kVTCompressionPropertyKey_MaxKeyFrameIntervalDuration,
             (__bridge CFTypeRef) @((double)gop_frames / (double)fps));
     setProp(s, kVTCompressionPropertyKey_MaxFrameDelayCount, (__bridge CFTypeRef) @0);
-    if (screen) {
-        // Text-heavy and mostly static: favour sharpness over motion.
+    if (screen == 1) {
+        // A screen for text and detail: favour sharpness over motion.
+        // (2, a screen for motion, keeps the rate first, like a camera.)
         setProp(s, kVTCompressionPropertyKey_Quality, (__bridge CFTypeRef) @0.75);
     }
     st = VTCompressionSessionPrepareToEncodeFrames(s);

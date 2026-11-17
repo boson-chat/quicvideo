@@ -80,6 +80,11 @@ qv_screen *qv_screen_start(uint32_t display_id, uint32_t window_id, int width, i
     return NULL;
 }
 void qv_screen_stop(qv_screen *s) {}
+unsigned char *qv_app_icon(const char *bundle_id, int size, size_t *len) { return NULL; }
+unsigned char *qv_screen_thumbnail(uint32_t display_id, uint32_t window_id, int max_w, size_t *len, char **err) {
+    *err = strdup("screen sharing isn't available on this device yet");
+    return NULL;
+}
 #endif
 
 // ---------------------------------------------------------------- camera

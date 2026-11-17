@@ -31,6 +31,24 @@ func CameraLayers(w, h, fps int) []*controlpb.Layer {
 	}, cameraBPP, 100_000, 2_500_000)
 }
 
+// ScreenLayersFor is the ladder for a screen share's mode: ScreenMotion is
+// ScreenLayers (15 and 30 fps); ScreenDetail keeps 15 fps but goes up to
+// 1440p at the top, for small text.
+func ScreenLayersFor(w, h int, mode ScreenMode) []*controlpb.Layer {
+	if mode != ScreenDetail {
+		return ScreenLayers(w, h)
+	}
+	if w <= 0 || h <= 0 {
+		return nil
+	}
+	lw, lh := fit(w, h, 1280, 1280)
+	hw, hh := fit(w, h, 2560, 1440)
+	if lw == hw {
+		return ladder([][3]int{{lw, lh, 15}}, screenBPP, 400_000, 4_000_000)
+	}
+	return ladder([][3]int{{lw, lh, 15}, {hw, hh, 15}}, screenBPP, 400_000, 4_000_000)
+}
+
 // ScreenFPS is a screen share's capture rate and top layer's frame rate.
 const ScreenFPS = 30
 
