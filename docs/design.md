@@ -185,7 +185,7 @@ The current boson VPS (2 shared vCPU, 2 GB) is fine for development and one or t
 
 `client/media` splits into platform-neutral Go and platform code:
 
-- **Layer presets.** `CameraLayers(w, h, fps)` gives quarter size at half rate, half size, and full size capped at 720p; `ScreenLayers(w, h)` gives ≤1280 wide at 5 fps and ≤1920 wide at 15 fps. Bitrates come from bits per pixel per frame (camera 0.042, screen 0.07), so 720p30 ≈ 1.16 Mbps and a 1920-wide screen ≈ 2.5 Mbps.
+- **Layer presets.** `CameraLayers(w, h, fps)` gives quarter size at half rate, half size, and full size capped at 720p (`CameraLayersFor(w, h, fps, q)` with `CameraDataSaver` stops at 360p, and with `CameraHigh` adds a 1080p layer ≤ 2.5 Mbps when the camera has it); `ScreenLayers(w, h)` gives ≤1280 wide at 5 fps and ≤1920 wide at 15 fps. Bitrates come from bits per pixel per frame (camera 0.042, screen 0.07), so 720p30 ≈ 1.16 Mbps and a 1920-wide screen ≈ 2.5 Mbps.
 - **`LayerForTile`.** Picks the smallest layer that, fitted into the tile's device pixels, is upscaled by at most ~11%; that becomes the subscription's max layer. Hidden tiles unsubscribe.
 - **`Publisher`.** Runs one encoder per **active** layer: created on `LayerActive(true)`, closed on false, so unwatched layers cost neither CPU nor upload.
   - Per-layer fps cap with 15% slack.

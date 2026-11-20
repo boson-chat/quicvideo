@@ -126,3 +126,58 @@ func TestScreenLayersFor(t *testing.T) {
 		t.Fatalf("default capture %d@%d", w, fps)
 	}
 }
+
+func TestCameraLayersFor(t *testing.T) {
+	dims := func(ls []*controlpb.Layer) [][3]uint32 {
+		out := make([][3]uint32, len(ls))
+		for i, l := range ls {
+			out[i] = [3]uint32{l.GetWidth(), l.GetHeight(), l.GetFps()}
+			if l.GetId() != uint32(i) {
+				t.Errorf("layer %d has id %d", i, l.GetId())
+			}
+			if i > 0 && l.GetBitrate() <= ls[i-1].GetBitrate() {
+				t.Errorf("bitrates must increase: %v", ls)
+			}
+		}
+		return out
+	}
+	eq := func(a, b [][3]uint32) bool {
+		if len(a) != len(b) {
+			return false
+		}
+		for i := range a {
+			if a[i] != b[i] {
+				return false
+			}
+		}
+		return true
+	}
+	// Auto is CameraLayers.
+	if got, want := dims(CameraLayersFor(1920, 1080, 30, CameraAuto)), dims(CameraLayers(1920, 1080, 30)); !eq(got, want) {
+		t.Errorf("auto = %v, want %v", got, want)
+	}
+	// Data saver: 360p at the top.
+	if got := dims(CameraLayersFor(1280, 720, 30, CameraDataSaver)); !eq(got, [][3]uint32{{320, 180, 15}, {640, 360, 30}}) {
+		t.Errorf("data saver = %v", got)
+	}
+	for _, l := range CameraLayersFor(1080, 1920, 30, CameraDataSaver) { // portrait phone
+		if l.GetHeight() > 360 || l.GetWidth()%2 != 0 || l.GetHeight()%2 != 0 {
+			t.Errorf("portrait data saver layer %v", l)
+		}
+	}
+	// High: a 1080p camera gets a 1080p layer on top, ≤ 2.5 Mbps.
+	hi := CameraLayersFor(1920, 1080, 30, CameraHigh)
+	if got := dims(hi); !eq(got, [][3]uint32{{320, 180, 15}, {640, 360, 30}, {1280, 720, 30}, {1920, 1080, 30}}) {
+		t.Errorf("high = %v", got)
+	}
+	if br := hi[3].GetBitrate(); br < 2_000_000 || br > 2_500_000 {
+		t.Errorf("1080p30 bitrate %d", br)
+	}
+	// ... and a 720p camera can't do better than Auto.
+	if got, want := dims(CameraLayersFor(1280, 720, 30, CameraHigh)), dims(CameraLayers(1280, 720, 30)); !eq(got, want) {
+		t.Errorf("high on 720p = %v, want %v", got, want)
+	}
+	if CameraLayersFor(0, 0, 30, CameraHigh) != nil || CameraLayersFor(640, 480, 0, CameraDataSaver) != nil {
+		t.Error("zero size")
+	}
+}
