@@ -19,6 +19,7 @@ const (
 // CameraLayers is the simulcast ladder for a camera capturing w×h at fps:
 // quarter size at half rate, half size, and full size (capped at 720p
 // height for the top layer by default: friends calls rarely need more).
+// It is CameraLayersFor(w, h, fps, CameraAuto).
 func CameraLayers(w, h, fps int) []*controlpb.Layer {
 	if w <= 0 || h <= 0 || fps <= 0 {
 		return nil
@@ -28,7 +29,55 @@ func CameraLayers(w, h, fps int) []*controlpb.Layer {
 		{even(tw / 4), even(th / 4), max(fps/2, 1)},
 		{even(tw / 2), even(th / 2), fps},
 		{tw, th, fps},
-	}, cameraBPP, 100_000, 2_500_000)
+	}, cameraBPP, 100_000, cameraCeil)
+}
+
+// cameraCeil is the most any camera layer gets (1080p30 lands on it).
+const cameraCeil = 2_500_000
+
+// CameraQuality caps a camera's top layer (a user's setting).
+type CameraQuality int
+
+const (
+	// CameraAuto is CameraLayers: the top layer is at most 720p.
+	CameraAuto CameraQuality = iota
+	// CameraDataSaver stops at 360p: half size at half rate and 360p
+	// (CameraLayers' two lower layers, for a 720p camera).
+	CameraDataSaver
+	// CameraHigh adds a 1080p layer above CameraLayers' three when the
+	// camera captures more than 720p (≤ 2.5 Mbps); otherwise it's
+	// CameraLayers.
+	CameraHigh
+)
+
+// CameraLayersFor is the camera ladder for quality q.
+func CameraLayersFor(w, h, fps int, q CameraQuality) []*controlpb.Layer {
+	if w <= 0 || h <= 0 || fps <= 0 {
+		return nil
+	}
+	switch q {
+	case CameraDataSaver:
+		tw, th := fit(w, h, 640, 360)
+		return ladder([][3]int{
+			{even(tw / 2), even(th / 2), max(fps/2, 1)},
+			{tw, th, fps},
+		}, cameraBPP, 100_000, cameraCeil)
+	case CameraHigh:
+		aw, _ := fit(w, h, 1280, 720)
+		hw, hh := fit(w, h, 1920, 1080)
+		if hw == aw {
+			return CameraLayers(w, h, fps)
+		}
+		ls := CameraLayers(w, h, fps)
+		// Three layers made by ladder are ascending; the fourth goes on
+		// top the same way.
+		steps := make([][3]int, 0, len(ls)+1)
+		for _, l := range ls {
+			steps = append(steps, [3]int{int(l.GetWidth()), int(l.GetHeight()), int(l.GetFps())})
+		}
+		return ladder(append(steps, [3]int{hw, hh, fps}), cameraBPP, 100_000, cameraCeil)
+	}
+	return CameraLayers(w, h, fps)
 }
 
 // ScreenLayersFor is the ladder for a screen share's mode: ScreenMotion is
