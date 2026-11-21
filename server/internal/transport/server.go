@@ -100,9 +100,17 @@ func (s *Server) Serve(ctx context.Context) error {
 
 	mux := http.NewServeMux()
 	mux.HandleFunc(WebTransportPath, func(w http.ResponseWriter, r *http.Request) {
+		if !s.checkOrigin(r) {
+			// Upgrade refuses it too, but writes no status: an unwritten
+			// response is a 200, which a browser takes as an open session.
+			log.Debug().Str("origin", r.Header.Get("Origin")).Msg("webtransport origin not allowed")
+			w.WriteHeader(http.StatusForbidden)
+			return
+		}
 		sess, err := s.wt.Upgrade(w, r)
 		if err != nil {
 			log.Debug().Err(err).Msg("webtransport upgrade failed")
+			w.WriteHeader(http.StatusBadRequest)
 			return
 		}
 		go s.handle(ctx, wtConn{sess})

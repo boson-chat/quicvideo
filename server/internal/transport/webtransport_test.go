@@ -6,10 +6,12 @@ import (
 	"crypto/tls"
 	"fmt"
 	"io"
+	"net/http"
 	"testing"
 	"time"
 
 	"github.com/boson-chat/quicvideo/gen/controlpb"
+	"github.com/boson-chat/quicvideo/server/config"
 	"github.com/boson-chat/quicvideo/server/internal/services/auth"
 	"github.com/boson-chat/quicvideo/server/internal/transport"
 	"github.com/boson-chat/quicvideo/wire"
@@ -128,4 +130,31 @@ func TestWebTransportSession(t *testing.T) {
 		t.Fatalf("native subscriber got track %d key %v len %d", f.TrackID, f.Keyframe, len(f.Payload))
 	}
 	_ = io.EOF
+}
+
+// A page from an origin WEBTRANSPORT_ORIGINS doesn't list gets a 403, not
+// an empty 200 a browser would take for an open session.
+func TestWebTransportOriginRefused(t *testing.T) {
+	addr := startServerCfg(t, auth.NewInsecureAuthService(), func(c *config.Config) {
+		c.QUICConfig.WebTransportOrigins = "https://chat.example.com"
+	})
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	d := &webtransport.Transport{
+		TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+		QUICConfig:      &quic.Config{EnableDatagrams: true, EnableStreamResetPartialDelivery: true},
+	}
+	url := fmt.Sprintf("https://%s%s", addr, transport.WebTransportPath)
+	res, _, err := d.Dial(ctx, url, http.Header{"Origin": {"https://evil.example.com"}})
+	if err == nil {
+		t.Fatal("a session from a refused origin opened")
+	}
+	if res == nil || res.StatusCode != http.StatusForbidden {
+		t.Fatalf("refused origin: response %v, err %v; want 403", res, err)
+	}
+	res, sess, err := d.Dial(ctx, url, http.Header{"Origin": {"https://chat.example.com"}})
+	if err != nil {
+		t.Fatalf("allowed origin: %v (%v)", err, res)
+	}
+	_ = sess.CloseWithError(0, "")
 }
