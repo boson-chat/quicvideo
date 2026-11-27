@@ -2,6 +2,7 @@
 package config
 
 import (
+	"strings"
 	"time"
 
 	"github.com/jinzhu/configor"
@@ -55,7 +56,9 @@ type QUICConfig struct {
 	// any). Sessions also need a token. "directory" = the origins at
 	// ORIGINS_URL (mixable with fixed origins, which stay allowed when that
 	// list can't be fetched).
-	WebTransportOrigins string `default:"*" env:"WEBTRANSPORT_ORIGINS"`
+	// Unset means "*" (set in LoadConfig: configor reads tag defaults as
+	// YAML, where "*" is an alias, and then drops every later default).
+	WebTransportOrigins string `env:"WEBTRANSPORT_ORIGINS"`
 	// The web origins list for "directory": the auth service's
 	// GET /v1/web-origins ({"origins": [...]}), e.g.
 	// http://auth:8080/v1/web-origins. Fetched at start and every
@@ -134,6 +137,9 @@ type RelayConfig struct {
 func LoadConfig() (Config, error) {
 	var cfg Config
 	err := configor.New(&configor.Config{ENVPrefix: "-", Silent: true}).Load(&cfg)
+	if strings.TrimSpace(cfg.QUICConfig.WebTransportOrigins) == "" {
+		cfg.QUICConfig.WebTransportOrigins = "*"
+	}
 	return cfg, err
 }
 
