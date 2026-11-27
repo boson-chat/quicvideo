@@ -9,6 +9,7 @@ import (
 	"net"
 	"os/signal"
 	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
@@ -16,6 +17,7 @@ import (
 	"github.com/boson-chat/quicvideo/server/http"
 	"github.com/boson-chat/quicvideo/server/internal/certs"
 	"github.com/boson-chat/quicvideo/server/internal/logger"
+	"github.com/boson-chat/quicvideo/server/internal/origins"
 	"github.com/boson-chat/quicvideo/server/internal/relay"
 	"github.com/boson-chat/quicvideo/server/internal/services/auth"
 	"github.com/boson-chat/quicvideo/server/internal/transport"
@@ -81,9 +83,17 @@ var serveCmd = &cobra.Command{
 		}
 		r := relay.New(ctx, ropts)
 		quicServer := transport.NewServer(cfg, tlsConf, authService, r, m)
+		webOrigins, wtOrigins, err := buildOrigins(ctx, cfg.QUICConfig)
+		if err != nil {
+			return err
+		}
+		quicServer.SetOrigins(wtOrigins)
 
 		g, gctx := errgroup.WithContext(ctx)
 		g.Go(func() error { return quicServer.Serve(gctx) })
+		if webOrigins != nil {
+			g.Go(func() error { webOrigins.Run(gctx); return nil })
+		}
 		g.Go(func() error {
 			return http.StartServerWithContext(gctx, cfg.HTTPConfig.Addr, cfg.AppConfig.Version, provider.Handler())
 		})
@@ -103,6 +113,27 @@ var serveCmd = &cobra.Command{
 		}
 		return g.Wait()
 	},
+}
+
+// buildOrigins parses WEBTRANSPORT_ORIGINS. With "directory" it also
+// returns the fetcher of ORIGINS_URL (to be run), which is then required.
+func buildOrigins(ctx context.Context, q config.QUICConfig) (*origins.Fetcher, *origins.Policy, error) {
+	var f *origins.Fetcher
+	if origins.UsesDirectory(q.WebTransportOrigins) {
+		u := strings.TrimSpace(q.OriginsURL)
+		if u == "" {
+			return nil, nil, errors.New("WEBTRANSPORT_ORIGINS says directory: set ORIGINS_URL (the auth service's /v1/web-origins, e.g. http://auth:8080/v1/web-origins)")
+		}
+		f = origins.NewFetcher(u, q.OriginsRefresh, nil)
+		logger.FromCtx(ctx).Info().Str("url", u).Dur("refresh", q.OriginsRefresh).
+			Msg("web origins: following the directory's Boson web clients")
+	}
+	p, err := origins.Parse(q.WebTransportOrigins, f)
+	if err != nil {
+		logger.FromCtx(ctx).Warn().Err(err).Msg("WEBTRANSPORT_ORIGINS: entry ignored")
+		p = origins.MustParse(q.WebTransportOrigins, f)
+	}
+	return f, p, nil
 }
 
 // RelayOptions maps the config to relay limits.

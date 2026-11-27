@@ -14,6 +14,7 @@ import (
 	"github.com/boson-chat/quicvideo/gen/controlpb"
 	"github.com/boson-chat/quicvideo/server/config"
 	"github.com/boson-chat/quicvideo/server/internal/certs"
+	"github.com/boson-chat/quicvideo/server/internal/origins"
 	"github.com/boson-chat/quicvideo/server/internal/relay"
 	"github.com/boson-chat/quicvideo/server/internal/services/auth"
 	"github.com/boson-chat/quicvideo/server/internal/transport"
@@ -26,6 +27,12 @@ func startServer(t *testing.T, a auth.AuthServiceImpl) string {
 }
 
 func startServerCfg(t *testing.T, a auth.AuthServiceImpl, edit func(*config.Config)) string {
+	t.Helper()
+	return startServerOrigins(t, a, edit, nil)
+}
+
+// startServerOrigins also sets the parsed WEBTRANSPORT_ORIGINS (nil: the config's).
+func startServerOrigins(t *testing.T, a auth.AuthServiceImpl, edit func(*config.Config), o *origins.Policy) string {
 	t.Helper()
 	cfg, err := config.LoadConfig()
 	if err != nil {
@@ -44,6 +51,9 @@ func startServerCfg(t *testing.T, a auth.AuthServiceImpl, edit func(*config.Conf
 	r := relay.New(ctx, relay.Options{Metrics: m, KeyframeRequestInterval: 50 * time.Millisecond,
 		Trace: func(session uint32, msg string) { t.Logf("controller s%d: %s", session, msg) }})
 	srv := transport.NewServer(cfg, &tls.Config{Certificates: []tls.Certificate{cert}}, a, r, m)
+	if o != nil {
+		srv.SetOrigins(o)
+	}
 	done := make(chan struct{})
 	go func() { _ = srv.Serve(ctx); close(done) }()
 	t.Cleanup(func() { cancel(); <-done })
