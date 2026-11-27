@@ -7,11 +7,13 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/http/httptest"
 	"testing"
 	"time"
 
 	"github.com/boson-chat/quicvideo/gen/controlpb"
 	"github.com/boson-chat/quicvideo/server/config"
+	"github.com/boson-chat/quicvideo/server/internal/origins"
 	"github.com/boson-chat/quicvideo/server/internal/services/auth"
 	"github.com/boson-chat/quicvideo/server/internal/transport"
 	"github.com/boson-chat/quicvideo/wire"
@@ -157,4 +159,50 @@ func TestWebTransportOriginRefused(t *testing.T) {
 		t.Fatalf("allowed origin: %v (%v)", err, res)
 	}
 	_ = sess.CloseWithError(0, "")
+}
+
+// WEBTRANSPORT_ORIGINS=directory,<own>: the own origin at once, the auth
+// service's list once fetched, others refused with 403.
+func TestWebTransportDirectoryOrigins(t *testing.T) {
+	authSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"origins":["https://chat.other.example.com"]}`))
+	}))
+	defer authSrv.Close()
+	f := origins.NewFetcher(authSrv.URL, time.Hour, nil)
+	p, err := origins.Parse("directory,https://chat.example.com", f)
+	must(t, err)
+	addr := startServerOrigins(t, auth.NewInsecureAuthService(), nil, p)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	d := &webtransport.Transport{
+		TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+		QUICConfig:      &quic.Config{EnableDatagrams: true, EnableStreamResetPartialDelivery: true},
+	}
+	url := fmt.Sprintf("https://%s%s", addr, transport.WebTransportPath)
+	dial := func(origin string) (int, error) {
+		res, sess, err := d.Dial(ctx, url, http.Header{"Origin": {origin}})
+		if err == nil {
+			_ = sess.CloseWithError(0, "")
+			return 200, nil
+		}
+		if res == nil {
+			return 0, err
+		}
+		return res.StatusCode, err
+	}
+	if code, _ := dial("https://chat.other.example.com"); code != http.StatusForbidden {
+		t.Fatalf("before the fetch: %d", code)
+	}
+	if code, err := dial("https://Chat.Example.com"); code != 200 {
+		t.Fatalf("own origin: %d %v", code, err)
+	}
+	if _, err := f.Refresh(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if code, err := dial("https://chat.other.example.com"); code != 200 {
+		t.Fatalf("listed origin: %d %v", code, err)
+	}
+	if code, _ := dial("https://evil.example.com"); code != http.StatusForbidden {
+		t.Fatalf("unlisted origin: %d", code)
+	}
 }

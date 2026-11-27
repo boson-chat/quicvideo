@@ -99,7 +99,7 @@ Browser support (Nov 2026), tested with Playwright 1.65 on macOS and in CI (Linu
 
 A browser without WebTransport or H.264 decoding gets "This browser isn't supported for video (missing: …)" and a disabled Join. Without H.264 encoding it can watch but not send. `videoSupport()` in `src/client.ts` does the check.
 
-`WEBTRANSPORT_ORIGINS` limits which page origins may open sessions (default `*`; sessions need a token either way). WebTransport sessions have no QUIC RTT/loss stats in the bandwidth controller, which then relies on send backlog, cuts and receiver reports.
+`WEBTRANSPORT_ORIGINS` limits which page origins may open sessions: comma-separated origins, `*` (the default) or `directory`, mixable (`directory,https://chat.example.com`); sessions need a token either way. `directory` allows the origins the install's auth service lists at `ORIGINS_URL` (`GET /v1/web-origins`: its own web client and those of the Boson servers verified in the directories it follows), fetched at start and every `ORIGINS_REFRESH` (`5m`; every 30 s after a failure). A failed fetch keeps the last good list; until the first one only the fixed entries are allowed. `ORIGINS_URL` is required with `directory`. Origins compare normalised (case, default port, trailing slash). WebTransport sessions have no QUIC RTT/loss stats in the bandwidth controller, which then relies on send backlog, cuts and receiver reports.
 
 quicvideo vendors a patched [webtransport-go](third_party/webtransport-go/QUICVIDEO_PATCHES.md): upstream doesn't support quic-go v0.65 yet.
 

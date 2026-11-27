@@ -10,12 +10,12 @@ import (
 	"fmt"
 	"net"
 	"net/http"
-	"strings"
 	"sync/atomic"
 	"time"
 
 	"github.com/boson-chat/quicvideo/server/config"
 	"github.com/boson-chat/quicvideo/server/internal/logger"
+	"github.com/boson-chat/quicvideo/server/internal/origins"
 	"github.com/boson-chat/quicvideo/server/internal/relay"
 	"github.com/boson-chat/quicvideo/server/internal/services/auth"
 	"github.com/boson-chat/quicvideo/server/metrics"
@@ -50,7 +50,14 @@ type Server struct {
 	addr  atomic.Pointer[net.Addr]
 	ready chan struct{}
 	wt    *webtransport.Server
+	// origins: the parsed WEBTRANSPORT_ORIGINS (SetOrigins); nil = the
+	// config's list, fixed entries only.
+	origins *origins.Policy
 }
+
+// SetOrigins sets the parsed WEBTRANSPORT_ORIGINS (which can follow the
+// directory's web origins). Call before Serve.
+func (s *Server) SetOrigins(p *origins.Policy) { s.origins = p }
 
 func NewServer(cfg config.Config, tlsConf *tls.Config, a auth.AuthServiceImpl, r *relay.Relay, m *metrics.Metrics) *Server {
 	tlsConf = tlsConf.Clone()
@@ -140,20 +147,15 @@ func (s *Server) Serve(ctx context.Context) error {
 	}
 }
 
-// checkOrigin applies WEBTRANSPORT_ORIGINS ("*" = any). Sessions still
-// need a token in Hello; origins only narrow which pages may try.
+// checkOrigin applies WEBTRANSPORT_ORIGINS ("*" = any; "directory" = the
+// auth service's web origins). Sessions still need a token in Hello;
+// origins only narrow which pages may try.
 func (s *Server) checkOrigin(r *http.Request) bool {
-	allowed := s.cfg.QUICConfig.WebTransportOrigins
-	if allowed == "" || allowed == "*" {
-		return true
+	p := s.origins
+	if p == nil {
+		p = origins.MustParse(s.cfg.QUICConfig.WebTransportOrigins, nil)
 	}
-	origin := r.Header.Get("Origin")
-	for _, o := range strings.Split(allowed, ",") {
-		if strings.TrimSpace(o) == origin {
-			return true
-		}
-	}
-	return false
+	return p.Allowed(r.Header.Get("Origin"))
 }
 
 func (s *Server) handle(ctx context.Context, conn mconn) {
